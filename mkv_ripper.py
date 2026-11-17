@@ -120,6 +120,10 @@ class Api:
 
     def startup(self):
         core.cleanup_old_exe()
+        if core.is_frozen() and self._settings.get("icons_build") != core.APP_BUILD:
+            # first run of a new build: get Windows to pick up the exe's current icon
+            threading.Thread(target=core.refresh_icons, daemon=True).start()
+            self.save_settings({"icons_build": core.APP_BUILD})
         if self._tools()["makemkv"]:
             self.refresh_drives()
         if core.is_frozen():
@@ -468,7 +472,8 @@ def main():
             window.destroy()
         window.events.loaded += lambda: threading.Thread(target=check, daemon=True).start()
     try:
-        webview.start()
+        ico = os.path.join(RES_DIR, "assets", "icon.ico")
+        webview.start(icon=ico if os.path.isfile(ico) else None)
     except Exception as e:  # noqa: BLE001
         if sys.platform == "win32":
             import ctypes

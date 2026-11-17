@@ -135,6 +135,23 @@ def cleanup_old_exe():
             pass
 
 
+def refresh_icons():
+    """Make Explorer redraw icons (taskbar pins, Start menu, shortcuts). Windows caches the icon it drew
+    for an exe path, so after an update replaces MKVRipper.exe in place it keeps showing the old one."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)   # SHCNE_ASSOCCHANGED
+    except Exception:  # noqa: BLE001 - cosmetic only
+        pass
+    try:
+        subprocess.run(["ie4uinit.exe", "-show"], timeout=20, creationflags=0x08000000,   # CREATE_NO_WINDOW
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def install_update(url):
     """Download the new exe, swap it in for the running one, and start it."""
     exe = sys.executable

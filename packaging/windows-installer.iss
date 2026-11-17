@@ -30,6 +30,7 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 SetupIconFile=..\assets\icon.ico
+ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=no
 
