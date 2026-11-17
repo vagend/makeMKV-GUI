@@ -197,7 +197,12 @@ class Api:
         plan = []
         for r in rows:
             how, eps, pts = r.get("how", "single"), int(r.get("eps") or 1), list(r.get("pts") or [])
-            if how == "whole" and eps > 1:
+            if how == "split" and r.get("auto") and eps > 1:
+                t = next((x for x in self._s["titles"] if x["id"] == r["id"]), {})
+                plan.append((r["id"], core.build_names(prefix, ep, eps), {"auto": eps, "total": t.get("secs", 0)},
+                             core.build_multi_name(prefix, ep, ep + eps - 1)))
+                ep += eps
+            elif how == "whole" and eps > 1:
                 plan.append((r["id"], [core.build_multi_name(prefix, ep, ep + eps - 1)], [], None))
                 ep += eps
             elif how == "split" and pts:
@@ -248,7 +253,9 @@ class Api:
                 names = os.path.basename(paths[0]) + (f" … {os.path.basename(paths[-1])}" if len(paths) > 1 else "")
                 self._set(status=f"Ripping title {lab} ({n} of {len(plan)})", progress=0)
                 self._logline(f"--- Title {lab} -> {names}")
-                if pts:
+                if isinstance(pts, dict):
+                    self._logline(f"Will split into {pts['auto']} episodes at the chapters closest to equal lengths")
+                elif pts:
                     self._logline(f"Will split before chapters {','.join(map(str, pts))}")
                 result = core.rip_title(exe, disc, minlen, tid, paths, self._robot, mkvmerge=mkvmerge,
                                         split_points=pts, fallback_path=fallback,

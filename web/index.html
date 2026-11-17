@@ -325,7 +325,7 @@ function parsePts(text, chapters) {
   if (chapters && u[u.length - 1] > chapters) throw new Error(`This title only has ${chapters} chapters.`);
   return u;
 }
-function epCount(id) { const h = S.how[id]; return !h ? 1 : h.how === "whole" ? h.eps : h.pts.length + 1; }
+function epCount(id) { const h = S.how[id]; return !h ? 1 : (h.how === "whole" || h.auto) ? h.eps : h.pts.length + 1; }
 function firstEp(id) {
   let ep = +S.start || 0;
   for (const t of B.titles) { if (t.id === id) return ep; if (S.checked.has(t.id)) ep += epCount(t.id); }
@@ -373,7 +373,7 @@ function renderTitles() {
     let pill;
     if (S.mode === "movie") pill = `<span class="pill none">—</span>`;
     else if (pa) pill = `<span class="pill mute" title="This title is the other titles joined together">Play all · skip</span>`;
-    else if (h && h.how === "split") pill = `<button class="pill accent" data-eps="${t.id}">${icon("scissors")}${h.pts.length + 1} episodes · split</button>`;
+    else if (h && h.how === "split") pill = `<button class="pill accent" data-eps="${t.id}">${icon("scissors")}${epCount(t.id)} episodes · split</button>`;
     else if (h && h.how === "whole") pill = `<button class="pill accent" data-eps="${t.id}">${icon("file")}${h.eps} episodes · one file</button>`;
     else if (multi) pill = `<button class="pill warn" data-eps="${t.id}">${icon("alert")}Several episodes?</button>`;
     else pill = `<button class="pill" data-eps="${t.id}" title="Split this title into episodes">1 episode</button>`;
@@ -450,7 +450,7 @@ function renderDisc() {
 }
 
 function renderFooter() {
-  const n = request().titles.reduce((a, r) => a + (r.how === "whole" ? 1 : r.how === "split" ? r.pts.length + 1 : 1), 0);
+  const n = request().titles.reduce((a, r) => a + (r.how === "whole" ? 1 : r.how === "split" ? (r.auto ? r.eps : r.pts.length + 1) : 1), 0);
   $("#ripBtn span").textContent = B.busy && B.task === "rip" ? "Ripping…" : n ? `Rip ${n} file${n === 1 ? "" : "s"}` : "Rip";
   $("#ripBtn").disabled = B.busy || !S.checked.size;
   const bar = $("#bar");
@@ -495,8 +495,9 @@ function openEpisodes(id) {
   const t = byId(id);
   if (!t || S.mode !== "tv" || B.busy) return;
   const h = S.how[id];
-  let eps = h ? (h.how === "whole" ? h.eps : h.pts.length + 1) : Math.max(2, t.secs >= 70 * 60 ? Math.round(t.secs / 60 / 45) : 2);
+  let eps = h ? epCount(id) : Math.max(2, t.secs >= 70 * 60 ? Math.round(t.secs / 60 / 45) : 2);
   let how = h && h.how === "whole" ? "whole" : "split";
+  let manual = !!(h && h.how === "split" && !h.auto);
   dialog(`
     <div class="dh"><h3>Episodes in title ${esc(t.label)}</h3><p>${esc(t.duration)} long · ${t.chapters || "?"} chapters</p></div>
     <div class="content">
@@ -505,11 +506,14 @@ function openEpisodes(id) {
       <label class="opt" data-how="split">
         <span class="ot"><input type="radio" name="how">${icon("scissors", "width:16px;height:16px")}Split into separate episode files</span>
         <div class="ob">
-          <div class="row"><span>New episodes start at chapters</span><input class="input mono" id="ePts" style="width:120px" spellcheck="false">
+          <div class="row" style="gap:16px">
+            <label class="switch"><input type="radio" name="pick" id="eAuto"> Find the cuts automatically</label>
+            <label class="switch"><input type="radio" name="pick" id="eMan"> I'll enter the chapters</label></div>
+          <div class="hint" id="eAutoTxt" style="margin-top:6px">After ripping, MKV Ripper reads the chapter times and cuts at the chapters closest to equal-length episodes.</div>
+          <div class="row" id="eManRow" style="margin-top:8px"><span>New episodes start at chapters</span><input class="input mono" id="ePts" style="width:120px" spellcheck="false" placeholder="7,13">
             <button class="btn sm" id="eFill">Fill in</button></div>
           <div class="hint" id="eHint" style="margin-top:6px"></div>
-          <div class="hint" style="margin-top:6px">Episode 1 always starts at chapter 1. Not sure? Play the disc in VLC and use Playback › Chapter.
-            If the split doesn't work out, the title is saved as one file instead, so nothing is lost.</div>
+          <div class="hint" style="margin-top:6px">If the split doesn't work out, the title is saved as one file instead, so nothing is lost.</div>
         </div>
       </label>
       <label class="opt" data-how="whole">
@@ -531,21 +535,25 @@ function openEpisodes(id) {
       else hint.textContent = `${t.chapters} chapters don't divide evenly into ${nEps()} episodes, so type the chapters in yourself.`;
     };
     const sync = () => {
-      d.querySelectorAll(".opt").forEach(o => { o.classList.toggle("on", o.dataset.how === how); o.querySelector("input").checked = o.dataset.how === how; });
+      d.querySelectorAll(".opt").forEach(o => { o.classList.toggle("on", o.dataset.how === how); o.querySelector(".ot input").checked = o.dataset.how === how; });
+      d.querySelector("#eAuto").checked = !manual; d.querySelector("#eMan").checked = manual;
+      d.querySelector("#eManRow").hidden = !manual; d.querySelector("#eAutoTxt").hidden = manual; hint.hidden = !manual;
       const f = firstEp(id); d.querySelector("#eWhole").textContent = multiName(f, f + nEps() - 1);
     };
     d.querySelectorAll(".opt").forEach(o => o.addEventListener("click", () => { how = o.dataset.how; sync(); }));
-    d.querySelectorAll(".stepper button").forEach(b => b.onclick = e => { e.preventDefault(); N.value = nEps() + +b.dataset.d; if (how === "split") fill(); sync(); });
+    d.querySelectorAll(".stepper button").forEach(b => b.onclick = e => { e.preventDefault(); N.value = nEps() + +b.dataset.d; if (manual) fill(); sync(); });
     N.oninput = () => { sync(); };
     d.querySelector("#eFill").onclick = e => { e.preventDefault(); fill(); };
-    if (!P.value) fill();
+    d.querySelector("#eAuto").onchange = () => { manual = false; sync(); };
+    d.querySelector("#eMan").onchange = () => { manual = true; if (!P.value) fill(); sync(); };
     sync();
     d.querySelector("[data-x]").onclick = close;
     d.querySelector("[data-single]").onclick = () => { delete S.how[id]; close(); refreshNames(); };
     const save = () => {
       const err = d.querySelector("#eErr");
       try {
-        S.how[id] = how === "whole" ? { how: "whole", eps: nEps() } : { how: "split", pts: parsePts(P.value, t.chapters) };
+        S.how[id] = how === "whole" ? { how: "whole", eps: nEps() }
+          : manual ? { how: "split", pts: parsePts(P.value, t.chapters) } : { how: "split", auto: true, eps: nEps() };
       } catch (e) { err.textContent = e.message; err.hidden = false; return; }
       S.checked.add(id); close(); refreshNames();
     };

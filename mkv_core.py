@@ -153,6 +153,61 @@ def install_update(url):
     subprocess.Popen([exe], env=env, close_fds=True)
 
 
+def find_mkvextract(mkvmerge=""):
+    """mkvextract comes with mkvmerge in MKVToolNix."""
+    if mkvmerge:
+        p = os.path.join(os.path.dirname(mkvmerge), "mkvextract.exe" if sys.platform == "win32" else "mkvextract")
+        if os.path.isfile(p):
+            return p
+    return shutil.which("mkvextract") or ""
+
+
+def chapter_times(mkvextract, src):
+    """Start time in seconds of each chapter in an MKV, in order (chapter 1 first)."""
+    out = os.path.join(os.path.dirname(src), "chapters.txt")
+    proc = _popen([mkvextract, src, "chapters", "--simple", out])
+    proc.communicate()
+    times = []
+    try:
+        with open(out, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = re.match(r"CHAPTER(\d+)=(\d+):(\d+):(\d+(?:\.\d+)?)", line.strip())
+                if m:
+                    times.append(int(m.group(2)) * 3600 + int(m.group(3)) * 60 + float(m.group(4)))
+    except OSError:
+        pass
+    return times
+
+
+def media_duration(mkvmerge, src):
+    """Length of an MKV in seconds from mkvmerge's JSON identification (0 if unknown)."""
+    try:
+        proc = _popen([mkvmerge, "-J", src])
+        out, _ = proc.communicate()
+        ns = json.loads(out).get("container", {}).get("properties", {}).get("duration") or 0
+        return ns / 1e9
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def auto_split_points(times, total, episodes):
+    """Chapters (1-based) where episodes 2..N start, picked as the chapter starts closest to
+    equal-length episodes. E.g. a 2:22:07 title with chapters at 0:47:19 and 1:34:19 -> [7, 13]."""
+    if episodes < 2 or len(times) < episodes or total <= 0:
+        return None
+    points, prev = [], 1
+    for k in range(1, episodes):
+        target = total * k / episodes
+        # only chapters after the previous cut, leaving room for the remaining episodes
+        choices = range(prev + 1, len(times) - (episodes - 1 - k) + 1)
+        if not choices:
+            return None
+        best = min(choices, key=lambda c: abs(times[c - 1] - target))
+        points.append(best)
+        prev = best
+    return points
+
+
 def parse_split_points(text, chapters=None):
     """'6, 11' -> [6, 11]. Each number is a chapter where a NEW episode starts."""
     text = text.strip()
@@ -357,6 +412,20 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
         try:
             if not mkvmerge or not os.path.isfile(mkvmerge):
                 raise RuntimeError("MKVToolNix (mkvmerge) isn't installed")
+            if isinstance(split_points, dict):          # {"auto": episodes, "total": seconds}
+                extract = find_mkvextract(mkvmerge)
+                if not extract:
+                    raise RuntimeError("mkvextract (part of MKVToolNix) wasn't found")
+                times = chapter_times(extract, ripped)
+                total = media_duration(mkvmerge, ripped) or split_points["total"] or (times[-1] if times else 0)
+                pts = auto_split_points(times, total, split_points["auto"])
+                if not pts:
+                    raise RuntimeError(f"couldn't find {split_points['auto']} episodes in {len(times)} chapters")
+                if on_line:
+                    fmt = lambda t: f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{int(t % 60):02d}"
+                    on_line("MSG", ["", "", "", "Splitting before chapters " + ", ".join(
+                        f"{c} ({fmt(times[c - 1])})" for c in pts)])
+                split_points = pts
             parts = split_file(mkvmerge, ripped, split_points, os.path.join(tmp, "parts"), on_split_progress)
             if len(parts) != len(final_paths):
                 raise RuntimeError(f"expected {len(final_paths)} episodes but the split made {len(parts)}")
