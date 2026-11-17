@@ -34,10 +34,39 @@ jobs:
           python -m pip install --upgrade pip pyinstaller
           pyinstaller --noconfirm --clean --onefile --windowed --name MKVRipper --add-data "APP_BUILD;." mkv_ripper.py
 
+      - name: Build installer
+        shell: pwsh
+        run: |
+          # per-user install, Start menu entry, Settings > Apps entry with Uninstall
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          if (!(Test-Path $iscc)) { $iscc = (Get-Command iscc).Source }
+          & $iscc "/DAppVersion=1.0.${{ github.run_number }}" "/DSourceExe=$PWD\dist\MKVRipper.exe" "/O$PWD\dist" packaging\windows-installer.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Check the installer
+        shell: pwsh
+        run: |
+          $app = "$env:LOCALAPPDATA\Programs\MKV Ripper"
+          $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\MKV Ripper.lnk"
+          Start-Process dist\MKVRipper-setup.exe -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          if (!(Test-Path "$app\MKVRipper.exe")) { throw "app not installed" }
+          if (!(Test-Path $lnk)) { throw "no Start menu entry" }
+          $u = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" | Where-Object DisplayName -eq "MKV Ripper"
+          if (!$u) { throw "not listed under Apps" }
+          "Installed: $($u.DisplayName) $($u.DisplayVersion)"
+          Start-Process "$app\unins000.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          Start-Sleep 3
+          if (Test-Path "$app\MKVRipper.exe") { throw "uninstall left the app behind" }
+          if (Test-Path $lnk) { throw "uninstall left the Start menu entry" }
+          "Uninstalled cleanly"
+
       - uses: actions/upload-artifact@v4
         with:
           name: MKVRipper
-          path: dist/MKVRipper.exe
+          path: |
+            dist/MKVRipper.exe
+            dist/MKVRipper-setup.exe
           if-no-files-found: error
           retention-days: 3   # only needed until the release step
 
@@ -56,12 +85,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest out/MKVRipper.exe \
+          gh release create latest out/MKVRipper-setup.exe out/MKVRipper.exe \
             --target "$GITHUB_SHA" \
             --title "MKV Ripper (build ${{ github.run_number }})" \
             --latest \
             --notes "Built from ${GITHUB_SHA::7} on $(date -u '+%Y-%m-%d %H:%M') UTC.
 
-          Download **MKVRipper.exe** and run it. No install or Python needed. If MakeMKV or MKVToolNix is missing, the app offers to install it.
+          **Install:** download **MKVRipper-setup.exe** and run it. It installs just for you (no admin needed), adds MKV Ripper to the Start menu, and can be uninstalled from Settings > Apps.
+          (MKVRipper.exe on its own also runs without installing; it's also what the app downloads to update itself.)
+
+          If MakeMKV or MKVToolNix is missing, the app offers to install it.
 
           Windows SmartScreen may warn that the app isn't from a known publisher: click **More info > Run anyway**."

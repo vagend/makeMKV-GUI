@@ -8,10 +8,11 @@ A small Windows front end for MakeMKV that rips the titles you pick and names th
 
 ## Download and run
 
-1. Go to [Releases](https://github.com/vagend/makeMKV-GUI/releases/latest) and download **MKVRipper.exe**. No Python needed.
-2. Run it. If MakeMKV or MKVToolNix isn't installed, the app offers to install it with Windows Package Manager (winget). Windows may ask for permission.
+1. Go to [Releases](https://github.com/vagend/makeMKV-GUI/releases/latest) and download **MKVRipper-setup.exe**. No Python needed.
+2. Run it. It installs just for you (no admin prompt), adds **MKV Ripper** to the Start menu, and can be removed from **Settings > Apps**. (Or download **MKVRipper.exe** to run it without installing.)
+3. Open MKV Ripper. If MakeMKV or MKVToolNix isn't installed, the app offers to install it with Windows Package Manager (winget). Windows may ask for permission.
 
-Windows SmartScreen may warn about the exe because it isn't code-signed. Click **More info > Run anyway**.
+Windows SmartScreen may warn about the download because it isn't code-signed. Click **More info > Run anyway**.
 
 ### Staying up to date
 
