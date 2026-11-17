@@ -1,3 +1,5 @@
 # Only needed to BUILD the app (GitHub does this for you). The finished MKVRipper.exe needs none of it.
 pywebview>=6.1
 pyinstaller>=6.10
+truststore>=0.10   # HTTPS checks through Windows itself (fixes 'unable to get local issuer certificate')
+certifi

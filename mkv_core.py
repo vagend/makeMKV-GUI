@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 
 DEFAULT_MAKEMKVCON = [
@@ -74,6 +75,41 @@ def _read_build():
 APP_BUILD = _read_build()
 GITHUB_REPO = "vagend/makeMKV-GUI"
 EXE_ASSET = "MKVRipper.exe"
+RELEASES_PAGE = f"https://github.com/{GITHUB_REPO}/releases/latest"
+
+
+def _ssl_context():
+    """HTTPS that works on any Windows PC. Python's own check only trusts certificates already in the
+    Windows store, but Windows downloads missing root certificates only when something asks it to verify a
+    site, so on some PCs GitHub fails with 'unable to get local issuer certificate'. truststore asks
+    Windows itself to verify (fetching roots as needed, and trusting antivirus HTTPS scanners the PC trusts);
+    certifi's certificate list is the backup."""
+    import ssl
+    try:
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        return ssl.create_default_context()
+
+
+def _urlopen(req, timeout):
+    import ssl
+    try:
+        return urllib.request.urlopen(req, timeout=timeout, context=_ssl_context())
+    except urllib.error.URLError as e:
+        if not isinstance(getattr(e, "reason", None), ssl.SSLError):
+            raise
+        try:                                           # try certifi's list before giving up
+            import certifi
+            return urllib.request.urlopen(req, timeout=timeout,
+                                          context=ssl.create_default_context(cafile=certifi.where()))
+        except ImportError:
+            raise e from None
 WINGET_IDS = {"MakeMKV": "GuinpinSoft.MakeMKV", "MKVToolNix": "MoritzBunkus.MKVToolNix"}
 
 
@@ -116,7 +152,7 @@ def latest_release():
     req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
                                  headers={"Accept": "application/vnd.github+json",
                                           "User-Agent": "MKVRipper"})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with _urlopen(req, timeout=15) as r:
         data = json.load(r)
     url = next((a["browser_download_url"] for a in data.get("assets", [])
                 if a.get("name", "").lower() == EXE_ASSET.lower()), None)
@@ -157,7 +193,7 @@ def install_update(url):
     exe = sys.executable
     new, old = exe + ".new", exe + ".old"
     req = urllib.request.Request(url, headers={"User-Agent": "MKVRipper"})
-    with urllib.request.urlopen(req, timeout=120) as r, open(new, "wb") as f:
+    with _urlopen(req, timeout=120) as r, open(new, "wb") as f:
         shutil.copyfileobj(r, f)
     if os.path.getsize(new) < 1_000_000:
         os.remove(new)

@@ -405,12 +405,25 @@ class Api:
 
         def work():
             self._set(status="Downloading the update...")
-            core.install_update(url)
+            try:
+                core.install_update(url)
+            except Exception as e:  # noqa: BLE001
+                self._logline(f"Update download failed: {e}")
+                self._notice("error", f"Couldn't download the update ({e}). The download page is opening in "
+                                      "your browser: run MKVRipper-setup.exe from there.")
+                self.open_releases()
+                self._set(status="Ready")
+                return
             self._set(status="Restarting...")
             time.sleep(0.5)
             self._window.destroy()
         self._run("update", work)
         return {"ok": True}
+
+    def open_releases(self):
+        import webbrowser
+        webbrowser.open(core.RELEASES_PAGE)
+        return True
 
     def open_folder(self, path):
         try:
@@ -467,6 +480,10 @@ def main():
         def check():
             time.sleep(2)
             result = window.evaluate_js("document.title + ' / api:' + typeof (window.pywebview && window.pywebview.api)")
+            try:   # the update check must work from the frozen exe, using Windows' certificate check
+                result = f"{result} / https:{type(core._ssl_context()).__module__} / latest:{core.latest_release()[0]}"
+            except Exception as e:  # noqa: BLE001
+                result = f"{result} / https-error:{e}"
             with open(smoke, "w", encoding="utf-8") as f:
                 f.write(str(result))
             window.destroy()

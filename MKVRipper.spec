@@ -9,6 +9,7 @@ ROOT = Path(SPECPATH)
 datas = [(str(ROOT / "web"), "web"), (str(ROOT / "assets" / "icon.ico"), "assets")]
 datas += [(str(ROOT / "APP_BUILD"), ".")] if (ROOT / "APP_BUILD").exists() else []   # written by the GitHub build
 datas += collect_data_files("webview")          # pywebview's own scripts
+datas += collect_data_files("certifi")          # backup certificate list for HTTPS
 binaries = collect_dynamic_libs("webview")      # and its WebView2 helper DLLs
 
 a = Analysis(
@@ -16,7 +17,7 @@ a = Analysis(
     pathex=[str(ROOT)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["clr"],                      # pythonnet, which pywebview uses on Windows
+    hiddenimports=["clr", "truststore", "certifi"],   # pythonnet (pywebview on Windows); HTTPS helpers
     excludes=["tkinter", "PyQt5", "PyQt6", "PySide2", "PySide6", "gi", "cefpython3"],
     noarchive=False,
 )

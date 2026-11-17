@@ -666,7 +666,12 @@ function openSettings() {
     d.querySelector("#sCheck").onclick = async () => {
       const s = d.querySelector("#sUpd"); s.textContent = "Checking…";
       const r = await api.check_update();
-      s.textContent = r.error ? r.error : r.latest ? "You have the latest build." : `Build ${r.build} is available — use the button at the top.`;
+      if (r.error) {
+        s.innerHTML = `${esc(r.error)}<br><button class="btn sm" id="sDl" style="margin-top:6px">Open the download page</button>`;
+        s.querySelector("#sDl").onclick = () => api.open_releases();
+        return;
+      }
+      s.textContent = r.latest ? "You have the latest build." : `Build ${r.build} is available — use the button at the top.`;
     };
   });
 }
