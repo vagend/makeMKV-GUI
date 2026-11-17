@@ -29,6 +29,7 @@ UninstallDisplayName=MKV Ripper
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=..\assets\icon.ico
 CloseApplications=yes
 RestartApplications=no
 
