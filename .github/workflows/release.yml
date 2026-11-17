@@ -31,26 +31,21 @@ jobs:
 
       - name: Build exe
         run: |
-          python -m pip install --upgrade pip pyinstaller sv-ttk darkdetect
-          pyinstaller --noconfirm --clean --onefile --windowed --name MKVRipper --add-data "APP_BUILD;." --collect-data sv_ttk mkv_ripper.py
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+          python -c "import webview, mkv_ripper; print('pywebview', webview.__version__ if hasattr(webview, '__version__') else '')"
+          pyinstaller --noconfirm --clean MKVRipper.spec
 
-      - name: Screenshot the UI (light and dark)
+      - name: Check the app opens
         shell: pwsh
         run: |
-          python -m pip install pillow
-          New-Item -ItemType Directory -Force shots | Out-Null
-          foreach ($t in "Light", "Dark") {
-            $env:MKVRIPPER_THEME = $t
-            $env:MKVRIPPER_SCREENSHOT = "$PWD\shots\$t"
-            python mkv_ripper.py
-          }
-          Get-ChildItem shots
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: screenshots
-          path: shots/
-          retention-days: 3
+          $env:MKVRIPPER_SMOKE = "$PWD\smoke.txt"
+          $p = Start-Process dist\MKVRipper.exe -PassThru
+          if (!$p.WaitForExit(60000)) { Stop-Process $p -Force; throw "app didn't finish loading within 60 s" }
+          if (!(Test-Path smoke.txt)) { throw "app closed without loading its page" }
+          $r = Get-Content smoke.txt
+          "Page check: $r"
+          if ($r -notmatch "MKV Ripper / api:object") { throw "page or Python bridge didn't load: $r" }
 
       - name: Build installer
         shell: pwsh

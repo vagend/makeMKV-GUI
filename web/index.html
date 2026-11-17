@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MKV Ripper</title>
+<style>
+:root {
+  --bg: #f3f4f6; --surface: #ffffff; --surface-2: #f8f9fb; --border: #e3e6eb; --border-strong: #d0d5dd;
+  --text: #111827; --muted: #6b7280; --faint: #9ca3af;
+  --accent: #2563eb; --accent-hover: #1d4ed8; --accent-soft: #eaf1ff; --accent-text: #1d4ed8;
+  --ok: #12a150; --ok-soft: #e7f6ed; --ok-text: #0b7a3b;
+  --danger: #d92d20; --danger-soft: #fdecea; --warn: #b54708; --warn-soft: #fff4e5;
+  --track: #e8ebef; --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
+  --shadow-lg: 0 20px 40px -12px rgba(16,24,40,.28);
+  --radius: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e1013; --surface: #171a1f; --surface-2: #1d2127; --border: #262b33; --border-strong: #353b45;
+    --text: #e8eaed; --muted: #9aa3af; --faint: #6b7280;
+    --accent: #3b82f6; --accent-hover: #5b95f8; --accent-soft: #14213a; --accent-text: #7fb0ff;
+    --ok: #1fb862; --ok-soft: #11291b; --ok-text: #4ad387;
+    --danger: #f97066; --danger-soft: #2d1614; --warn: #fdb022; --warn-soft: #2b2010;
+    --track: #262b33; --shadow: 0 1px 2px rgba(0,0,0,.4); --shadow-lg: 0 24px 48px -12px rgba(0,0,0,.6);
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column; overflow: hidden; user-select: none;
+}
+input { user-select: text; }
+button, input, select { font: inherit; color: inherit; }
+svg.i { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+/* ---------- header ---------- */
+header { display: flex; align-items: center; gap: 12px; padding: 14px 24px 10px; flex: none; }
+.logo { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), #7c3aed);
+  display: grid; place-items: center; color: #fff; box-shadow: var(--shadow); }
+.logo svg { width: 20px; height: 20px; }
+.brand { font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.brand small { font-weight: 450; color: var(--muted); font-size: 13px; margin-left: 6px; }
+.spacer { flex: 1; }
+.chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); height: 28px;
+  padding: 0 11px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); white-space: nowrap; }
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.chip.ok .dot { background: var(--ok); }
+.chip.warn { color: var(--warn); } .chip.warn .dot { background: var(--warn); }
+.chip.bad { color: var(--danger); } .chip.bad .dot { background: var(--danger); }
+button.chip { cursor: pointer; }
+button.chip:hover { border-color: var(--border-strong); color: var(--text); }
+.updchip { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 35%, transparent); font-weight: 600; }
+
+/* ---------- layout ---------- */
+main { flex: 1; min-height: 0; overflow: auto; padding: 0 24px 14px; display: flex; flex-direction: column; gap: 12px;
+  scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 18px; }
+.card { flex: none; }
+.card.grow { flex: 1 1 0; min-height: 300px; display: flex; flex-direction: column; }
+.card-h.inline { margin: 0; flex-wrap: nowrap; }
+.card-h.inline h2 { width: 94px; flex: none; }
+.form { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 8px 10px; align-items: center; margin-top: 12px; }
+.form > .lbl { color: var(--muted); font-size: 13px; font-weight: 550; padding-left: 34px; }
+.form .hint { grid-column: 2 / 4; margin: -2px 0 2px; }
+.epwrap { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; white-space: nowrap; }
+.card-h { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.step { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent-text); flex: none; }
+.card-h h2 { font-size: 15px; font-weight: 650; margin: 0; }
+.card-h .sub { color: var(--muted); font-size: 13px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow1 { flex: 1; min-width: 160px; }
+
+/* ---------- controls ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; padding: 0 14px;
+  border-radius: 9px; border: 1px solid var(--border-strong); background: var(--surface); cursor: pointer;
+  font-weight: 550; white-space: nowrap; transition: background .12s, border-color .12s, transform .05s; }
+.btn:hover { background: var(--surface-2); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .5; cursor: default; transform: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.big { height: 44px; padding: 0 22px; font-size: 15px; border-radius: 10px; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.btn.icon { width: 36px; padding: 0; }
+.btn.sm { height: 30px; padding: 0 10px; font-size: 13px; border-radius: 8px; }
+.input, select.input { height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid var(--border-strong);
+  background: var(--surface-2); outline: none; min-width: 0; transition: border-color .15s, box-shadow .15s; }
+.input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--surface); }
+.input.num { width: 76px; text-align: center; }
+label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); font-weight: 550; }
+.seg { display: inline-flex; padding: 3px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.seg button { height: 30px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; cursor: pointer;
+  color: var(--muted); font-weight: 550; display: inline-flex; align-items: center; gap: 6px; }
+.seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.hint { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+.hint code { font: 12px ui-monospace, Consolas, monospace; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); padding: 1px 6px; border-radius: 5px; }
+.callout { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; font-size: 13px; margin-bottom: 10px; }
+.callout.info { background: var(--ok-soft); color: var(--ok-text); }
+.callout.warn { background: var(--warn-soft); color: var(--warn); }
+.callout.err { background: var(--danger-soft); color: var(--danger); }
+.callout .btn { margin-left: auto; }
+
+/* ---------- title list ---------- */
+.tlist { flex: 1; min-height: 120px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
+  scrollbar-width: thin; }
+.trow { display: grid; grid-template-columns: 24px 54px 74px 80px 84px minmax(160px, 196px) minmax(0, 1fr);
+  gap: 12px; align-items: center; padding: 0 14px; min-height: 44px; border-bottom: 1px solid var(--border); }
+.trow:last-child { border-bottom: 0; }
+.trow.head { min-height: 34px; position: sticky; top: 0; z-index: 1; background: var(--surface-2); font-size: 11.5px;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--faint); font-weight: 650; }
+.trow.t { cursor: pointer; }
+.trow.t:hover { background: var(--surface); }
+.trow.t.on { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.trow.t.skip .len, .trow.t.skip .num { color: var(--faint); }
+.trow input[type=checkbox] { accent-color: var(--accent); width: 17px; height: 17px; margin: 0; pointer-events: none; }
+.trow .num { font-weight: 650; font-variant-numeric: tabular-nums; }
+.trow .len, .trow .ch, .trow .sz { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+.trow .len { color: var(--text); }
+.trow .out { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.trow .out .arrow { color: var(--faint); margin: 0 4px; }
+.trow .out.none { color: var(--faint); }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 999px; font-size: 12.5px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted); cursor: pointer; white-space: nowrap; font-weight: 550; max-width: 100%; }
+.pill svg.i { width: 14px; height: 14px; }
+.pill:hover { border-color: var(--border-strong); color: var(--text); }
+.pill.accent { background: var(--accent-soft); color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.pill.mute { cursor: default; background: transparent; border-style: dashed; }
+.pill.none { cursor: default; border-color: transparent; background: transparent; }
+.empty { flex: 1; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 30px 20px; }
+.empty svg { width: 42px; height: 42px; color: var(--faint); stroke-width: 1.5; margin-bottom: 8px; }
+.empty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 4px; }
+.listbar { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+@media (max-width: 980px) { .trow { grid-template-columns: 24px 50px 70px 0 0 minmax(150px, 180px) minmax(0, 1fr); gap: 10px; }
+  .trow .ch, .trow .sz { visibility: hidden; } }
+@media (max-width: 860px) { .chip.tool { display: none; } }
+
+/* ---------- footer ---------- */
+footer { flex: none; display: flex; align-items: center; gap: 16px; padding: 12px 24px 14px; background: var(--surface);
+  border-top: 1px solid var(--border); }
+.prog { flex: 1; min-width: 0; }
+.prog .bar { height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; margin-bottom: 6px; }
+.prog .bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width .3s; }
+.prog .bar.indet i { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(340%); } }
+.prog .st { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prog .st b { color: var(--text); font-weight: 600; }
+.logbox { flex: none; height: 180px; margin: 0; padding: 10px 24px; overflow: auto; background: var(--surface-2); border-top: 1px solid var(--border);
+  font: 12px/1.5 "Cascadia Mono", Consolas, ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; user-select: text; }
+
+/* ---------- dialogs ---------- */
+.scrim { position: fixed; inset: 0; background: rgba(15, 18, 24, .45); display: grid; place-items: center; padding: 20px; z-index: 50;
+  animation: fade .12s ease-out; }
+@keyframes fade { from { opacity: 0; } }
+.dlg { width: min(560px, 100%); max-height: 100%; display: flex; flex-direction: column; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow-lg); animation: pop .14s ease-out; }
+@keyframes pop { from { transform: translateY(6px) scale(.98); opacity: 0; } }
+.dlg .dh { padding: 18px 20px 6px; }
+.dlg .dh h3 { margin: 0; font-size: 17px; font-weight: 650; }
+.dlg .dh p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.dlg .content { padding: 12px 20px; overflow: auto; }
+.dlg .df { display: flex; gap: 8px; align-items: center; padding: 14px 20px 18px; flex-wrap: wrap; }
+.dlg .df .spacer { flex: 1; }
+.opt { display: block; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; cursor: pointer; }
+.opt:hover { border-color: var(--border-strong); }
+.opt.on { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.opt .ot { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.opt .ot input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.opt .ob { margin: 8px 0 0 26px; color: var(--muted); font-size: 13px; }
+.opt:not(.on) .ob .row { opacity: .45; pointer-events: none; }
+.stepper { display: inline-flex; align-items: center; border: 1px solid var(--border-strong); border-radius: 9px; overflow: hidden; }
+.stepper button { width: 34px; height: 34px; border: 0; background: var(--surface-2); cursor: pointer; font-size: 17px; }
+.stepper button:hover { background: var(--track); }
+.stepper input { width: 46px; height: 34px; border: 0; text-align: center; background: var(--surface); outline: none; font-weight: 600; }
+.mono { font: 13px ui-monospace, Consolas, monospace; }
+.setrow { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.setrow:last-child { border-bottom: 0; }
+.setrow .sh { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-bottom: 8px; }
+.setrow .sh .chip { margin-left: auto; }
+.filelist { margin: 8px 0 0; padding: 8px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  font: 12.5px ui-monospace, Consolas, monospace; max-height: 160px; overflow: auto; }
+
+/* ---------- toasts ---------- */
+.toasts { position: fixed; right: 20px; top: 64px; display: flex; flex-direction: column; gap: 8px; z-index: 60; width: min(380px, calc(100% - 40px)); }
+.toast { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--surface);
+  border: 1px solid var(--border); box-shadow: var(--shadow-lg); font-size: 13px; animation: pop .14s ease-out; }
+.toast.error { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.toast .ti { color: var(--ok); } .toast.error .ti { color: var(--danger); }
+.toast .x { margin-left: auto; cursor: pointer; color: var(--faint); background: none; border: 0; padding: 0; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><path d="M12 2a10 10 0 0 1 10 10"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-scissors" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></symbol>
+  <symbol id="i-tv" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></symbol>
+</svg>
+
+<header>
+  <div class="logo"><svg class="i"><use href="#i-disc"/></svg></div>
+  <div class="brand">MKV Ripper<small id="ver"></small></div>
+  <div class="spacer"></div>
+  <button class="chip updchip" id="updChip" hidden><svg class="i" style="width:14px;height:14px"><use href="#i-download"/></svg><span></span></button>
+  <span class="chip tool" id="chipMakeMKV"><span class="dot"></span>MakeMKV</span>
+  <span class="chip tool" id="chipMKVToolNix"><span class="dot"></span>MKVToolNix</span>
+  <button class="btn ghost icon" id="settingsBtn" title="Settings"><svg class="i"><use href="#i-gear"/></svg></button>
+</header>
+
+<main>
+  <div class="callout err" id="missingBanner" hidden style="margin:0">
+    <svg class="i"><use href="#i-alert"/></svg>
+    <span>MakeMKV isn't installed. MKV Ripper uses it to read your discs.</span>
+    <button class="btn sm primary" id="installMakeMKV">Install MakeMKV</button>
+  </div>
+
+  <section class="card">
+    <div class="card-h inline"><span class="step">1</span><h2>Disc</h2>
+      <select class="input grow1" id="drive" title="Disc drive"></select>
+      <button class="btn icon" id="refreshBtn" title="Look for drives again"><svg class="i"><use href="#i-refresh"/></svg></button>
+      <button class="btn primary" id="scanBtn" style="min-width:130px"><svg class="i"><use href="#i-disc"/></svg>Scan disc</button>
+    </div>
+  </section>
+
+  <section class="card grow">
+    <div class="card-h">
+      <span class="step">2</span><h2>Pick titles</h2><span class="sub" id="pickSub"></span>
+      <div class="listbar">
+        <button class="btn ghost sm" id="allBtn">Select all</button>
+        <button class="btn ghost sm" id="noneBtn">Select none</button>
+      </div>
+    </div>
+    <div class="callout info" id="playAllNote" hidden><svg class="i"><use href="#i-check"/></svg><span></span></div>
+    <div class="callout warn" id="multiNote" hidden><svg class="i"><use href="#i-alert"/></svg><span></span>
+      <button class="btn sm" id="multiBtn"><svg class="i" style="width:15px;height:15px"><use href="#i-scissors"/></svg>Episodes…</button></div>
+    <div class="tlist" id="tlist"></div>
+  </section>
+
+  <section class="card">
+    <div class="card-h" style="margin:0"><span class="step">3</span><h2>Name and save</h2>
+      <div class="seg" style="margin-left:auto">
+        <button data-mode="tv" class="on"><svg class="i" style="width:15px;height:15px"><use href="#i-tv"/></svg>TV show</button>
+        <button data-mode="movie"><svg class="i" style="width:15px;height:15px"><use href="#i-film"/></svg>Movie</button>
+      </div>
+    </div>
+    <div class="form">
+      <span class="lbl" id="nameLbl">Name prefix</span>
+      <input class="input" id="prefix" spellcheck="false" placeholder="Show (Year) - S01E">
+      <input class="input" id="movie" spellcheck="false" placeholder="The Matrix (1999)" hidden>
+      <span class="epwrap" id="tvFields">First episode<input class="input num" id="start" type="number" min="0" value="1"></span>
+      <span id="movieFields" hidden></span>
+      <div class="hint" id="nameHint"></div>
+      <span class="lbl">Save to</span>
+      <input class="input" id="out" spellcheck="false" placeholder="Choose the folder the files go in">
+      <button class="btn" id="browseOut"><svg class="i"><use href="#i-folder"/></svg>Browse…</button>
+    </div>
+  </section>
+</main>
+
+<pre class="logbox" id="logbox" hidden></pre>
+<footer>
+  <button class="btn primary big" id="ripBtn"><svg class="i"><use href="#i-download"/></svg><span>Rip</span></button>
+  <div class="prog">
+    <div class="bar" id="bar"><i></i></div>
+    <div class="st" id="status">Ready</div>
+  </div>
+  <button class="btn ghost sm" id="logBtn" title="Show what MakeMKV is doing"><svg class="i" style="width:16px;height:16px"><use href="#i-terminal"/></svg>Details</button>
+</footer>
+
+<div class="toasts" id="toasts"></div>
+<div id="dialogs"></div>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const icon = (n, st = "") => `<svg class="i" ${st ? `style="${st}"` : ""}><use href="#i-${n}"/></svg>`;
+let api = null;
+
+const S = {                       // what the user has chosen
+  mode: "tv", prefix: "S1E", start: 1, movie: "", out: "", minlen: 120,
+  checked: new Set(), how: {},    // how[id] = {how: "split"|"whole", eps, pts}
+  names: {}, nameErr: "",
+};
+let B = { titles: [], drives: [], play_all: {}, tools: {}, busy: false, scan_id: 0, notices: [] };   // last state from Python
+let seenScan = 0, seenNotice = 0, logFrom = 0, lastResult = null, drivesKey = "";
+
+/* ---------- helpers ---------- */
+const byId = id => B.titles.find(t => t.id === id);
+const isPlayAll = t => String(t.id) in (B.play_all || {});
+const likelyMulti = t => S.mode === "tv" && t.secs >= 70 * 60 && t.chapters >= 4 && !S.how[t.id] && !isPlayAll(t);
+function multiName(first, last) {
+  const m = S.prefix.match(/[Ee](0*)$/);
+  return `${S.prefix}${first}-E${m ? m[1] : ""}${last}.mkv`;
+}
+function guessPts(chapters, n) {
+  if (n < 2 || chapters < n || chapters % n) return null;
+  const step = chapters / n; return Array.from({length: n - 1}, (_, k) => 1 + step * (k + 1));
+}
+function parsePts(text, chapters) {
+  const parts = text.split(/[\s,]+/).filter(Boolean);
+  if (!parts.length) throw new Error("Enter the chapters where episodes 2, 3, … start, or click Fill in.");
+  const pts = [];
+  for (const p of parts) { if (!/^\d+$/.test(p)) throw new Error(`"${p}" isn't a chapter number.`); pts.push(+p); }
+  const u = [...new Set(pts)].sort((a, b) => a - b);
+  if (u[0] < 2) throw new Error("Episode 1 always starts at chapter 1, so list where the next episodes start (2 or higher).");
+  if (chapters && u[u.length - 1] > chapters) throw new Error(`This title only has ${chapters} chapters.`);
+  return u;
+}
+function epCount(id) { const h = S.how[id]; return !h ? 1 : h.how === "whole" ? h.eps : h.pts.length + 1; }
+function firstEp(id) {
+  let ep = +S.start || 0;
+  for (const t of B.titles) { if (t.id === id) return ep; if (S.checked.has(t.id)) ep += epCount(t.id); }
+  return ep;
+}
+function request() {
+  return { mode: S.mode, prefix: S.prefix, start: S.start, movie: S.movie, out: S.out,
+    titles: B.titles.filter(t => S.checked.has(t.id)).map(t => ({ id: t.id, ...(S.how[t.id] || {how: "single"}) })) };
+}
+let saveT = 0;
+function persist() {
+  clearTimeout(saveT);
+  saveT = setTimeout(() => api.save_settings({ mode: S.mode, prefix: S.prefix, out: S.out, minlen: S.minlen }), 400);
+}
+
+/* ---------- rendering ---------- */
+let prevT = 0;
+function refreshNames() {
+  clearTimeout(prevT);
+  prevT = setTimeout(async () => {
+    const r = await api.preview(request());
+    S.names = r.names || {}; S.nameErr = r.error || "";
+    renderTitles(); renderFooter();
+  }, 60);
+}
+
+function renderTitles() {
+  const box = $("#tlist");
+  const sub = $("#pickSub");
+  if (!B.titles.length) {
+    sub.textContent = "";
+    box.innerHTML = B.scan_id && !B.busy
+      ? `<div class="empty"><div>${icon("disc")}<b>No titles found</b>Try lowering the minimum length in Settings, then scan again.</div></div>`
+      : `<div class="empty"><div>${icon("disc")}<b>No disc scanned yet</b>Insert a disc and click <b style="display:inline">Scan disc</b>.</div></div>`;
+    $("#playAllNote").hidden = $("#multiNote").hidden = true;
+    return;
+  }
+  const n = S.checked.size;
+  sub.textContent = `${B.titles.length} title${B.titles.length === 1 ? "" : "s"} · ${n} selected`;
+  let html = `<div class="trow head"><span></span><span>Title</span><span>Length</span><span class="ch">Chapters</span><span class="sz">Size</span><span>Episodes</span><span>Saved as</span></div>`;
+  let warnT = null;
+  for (const t of B.titles) {
+    const on = S.checked.has(t.id), pa = isPlayAll(t), h = S.how[t.id], multi = likelyMulti(t);
+    if (multi && on && !warnT) warnT = t;
+    let pill;
+    if (S.mode === "movie") pill = `<span class="pill none">—</span>`;
+    else if (pa) pill = `<span class="pill mute" title="This title is the other titles joined together">Play all · skip</span>`;
+    else if (h && h.how === "split") pill = `<button class="pill accent" data-eps="${t.id}">${icon("scissors")}${h.pts.length + 1} episodes · split</button>`;
+    else if (h && h.how === "whole") pill = `<button class="pill accent" data-eps="${t.id}">${icon("file")}${h.eps} episodes · one file</button>`;
+    else if (multi) pill = `<button class="pill warn" data-eps="${t.id}">${icon("alert")}Several episodes?</button>`;
+    else pill = `<button class="pill" data-eps="${t.id}" title="Split this title into episodes">1 episode</button>`;
+    const names = S.names[String(t.id)] || [];
+    let out = `<span class="out none">${on ? (S.nameErr ? esc(S.nameErr) : "") : "Not ripped"}</span>`;
+    if (on && names.length) {
+      const base = s => s.split(/[\\/]/).pop();
+      out = names.length > 1
+        ? `<span class="out" title="${esc(names.join("\n"))}">${esc(base(names[0]))}<span class="arrow">→</span>${esc(base(names[names.length - 1]))}</span>`
+        : `<span class="out" title="${esc(names[0])}">${esc(names[0])}</span>`;
+    }
+    html += `<div class="trow t ${on ? "on" : ""} ${pa ? "skip" : ""}" data-id="${t.id}">
+      <input type="checkbox" ${on ? "checked" : ""} tabindex="-1">
+      <span class="num">${esc(t.label)}</span><span class="len">${esc(t.duration || "")}</span>
+      <span class="ch">${t.chapters || ""}</span><span class="sz">${esc(t.size || "")}</span>
+      <span>${pill}</span>${out}</div>`;
+  }
+  box.innerHTML = html;
+
+  const pa = Object.entries(B.play_all || {})[0];
+  if (pa) {
+    const big = byId(+pa[0]), eps = pa[1].map(id => byId(id)?.label).join(", ");
+    $("#playAllNote span").textContent = `Title ${big?.label} is “Play all” — titles ${eps} back to back. ` +
+      (S.mode === "tv" ? "The episode titles are selected for you, in order." : "");
+  }
+  $("#playAllNote").hidden = !pa;
+  $("#multiNote").hidden = !warnT;
+  if (warnT) {
+    $("#multiNote span").textContent = `Title ${warnT.label} is ${warnT.duration} long, so it probably holds several episodes.`;
+    $("#multiBtn").onclick = () => openEpisodes(warnT.id);
+  }
+}
+
+function renderNaming() {
+  document.querySelectorAll(".seg button").forEach(b => b.classList.toggle("on", b.dataset.mode === S.mode));
+  $("#tvFields").hidden = $("#prefix").hidden = S.mode !== "tv";
+  $("#movieFields").hidden = $("#movie").hidden = S.mode !== "movie";
+  $("#nameLbl").textContent = S.mode === "tv" ? "Name prefix" : "Movie name";
+  if (S.mode === "tv") {
+    const s = +S.start || 0;
+    $("#nameHint").innerHTML = `Selected titles are numbered top to bottom: <code>${esc(S.prefix)}${s}.mkv</code>, <code>${esc(S.prefix)}${s + 1}.mkv</code>, …  For the next disc, set First episode to continue.`;
+  } else {
+    const m = S.movie.trim() || "The Matrix (1999)";
+    $("#nameHint").innerHTML = `Saved as <code>${esc(m)}\\${esc(m)}.mkv</code>. Any other selected titles go beside it as Plex extras.`;
+  }
+}
+
+function renderHeader() {
+  $("#ver").textContent = B.build ? `build ${B.build}` : "";
+  const tools = B.tools || {};
+  const mk = $("#chipMakeMKV"), mm = $("#chipMKVToolNix");
+  mk.className = "chip tool " + (tools.makemkv ? "ok" : "bad");
+  mm.className = "chip tool " + (tools.mkvmerge ? "ok" : "warn");
+  mk.title = tools.makemkv || "Not installed"; mm.title = tools.mkvmerge || "Not installed (only needed for splitting)";
+  $("#missingBanner").hidden = !!tools.makemkv || B.task === "install";
+  const u = $("#updChip");
+  u.hidden = !B.update;
+  if (B.update) u.querySelector("span").textContent = `Update to build ${B.update.build}`;
+}
+
+function renderDisc() {
+  const key = JSON.stringify(B.drives);
+  if (key !== drivesKey) {
+    drivesKey = key;
+    const sel = $("#drive"), prev = sel.value;
+    sel.innerHTML = B.drives.length
+      ? B.drives.map(d => `<option value="${d.index}">${esc(d.disc || "No disc")}  —  ${esc(d.name)}</option>`).join("")
+      : `<option value="">No disc drives found</option>`;
+    if (B.drives.some(d => String(d.index) === prev)) sel.value = prev;
+    else { const w = B.drives.find(d => d.disc); if (w) sel.value = w.index; }
+  }
+  $("#scanBtn").disabled = B.busy || !B.drives.length || !(B.tools || {}).makemkv;
+  $("#refreshBtn").disabled = B.busy || !(B.tools || {}).makemkv;
+}
+
+function renderFooter() {
+  const n = request().titles.reduce((a, r) => a + (r.how === "whole" ? 1 : r.how === "split" ? r.pts.length + 1 : 1), 0);
+  $("#ripBtn span").textContent = B.busy && B.task === "rip" ? "Ripping…" : n ? `Rip ${n} file${n === 1 ? "" : "s"}` : "Rip";
+  $("#ripBtn").disabled = B.busy || !S.checked.size;
+  const bar = $("#bar");
+  const working = B.busy;
+  bar.classList.toggle("indet", working && (B.progress == null));
+  bar.querySelector("i").style.width = working && B.progress != null ? `${Math.round(B.progress * 100)}%`
+    : (!working && B.result ? "100%" : "0%");
+  const pct = working && B.progress != null ? ` <b>${Math.round(B.progress * 100)}%</b>` : "";
+  $("#status").innerHTML = esc(B.status || "Ready") + pct;
+}
+
+function renderAll() { renderHeader(); renderDisc(); renderNaming(); renderTitles(); renderFooter(); }
+
+/* ---------- toasts & dialogs ---------- */
+function toast(kind, text) {
+  const el = document.createElement("div");
+  el.className = "toast " + kind;
+  el.innerHTML = `<span class="ti">${icon(kind === "error" ? "alert" : "check")}</span><span>${esc(text)}</span><button class="x">${icon("x", "width:15px;height:15px")}</button>`;
+  el.querySelector(".x").onclick = () => el.remove();
+  $("#toasts").appendChild(el);
+  if (kind !== "error") setTimeout(() => el.remove(), 7000);
+}
+function dialog(html, onMount) {
+  const scrim = document.createElement("div");
+  scrim.className = "scrim";
+  scrim.innerHTML = `<div class="dlg">${html}</div>`;
+  const close = () => { scrim.remove(); document.removeEventListener("keydown", key); };
+  const key = e => { if (e.key === "Escape") close(); };
+  document.addEventListener("keydown", key);
+  scrim.addEventListener("mousedown", e => { if (e.target === scrim) close(); });
+  $("#dialogs").appendChild(scrim);
+  onMount && onMount(scrim.querySelector(".dlg"), close);
+  return close;
+}
+function confirmBox(title, body, okText, cb, danger = false) {
+  dialog(`<div class="dh"><h3>${esc(title)}</h3></div><div class="content">${body}</div>
+    <div class="df"><div class="spacer"></div><button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>${esc(okText)}</button></div>`,
+    (d, close) => { d.querySelector("[data-x]").onclick = close; d.querySelector("[data-ok]").onclick = () => { close(); cb(); }; d.querySelector("[data-ok]").focus(); });
+}
+
+function openEpisodes(id) {
+  const t = byId(id);
+  if (!t || S.mode !== "tv" || B.busy) return;
+  const h = S.how[id];
+  let eps = h ? (h.how === "whole" ? h.eps : h.pts.length + 1) : Math.max(2, t.secs >= 70 * 60 ? Math.round(t.secs / 60 / 45) : 2);
+  let how = h && h.how === "whole" ? "whole" : "split";
+  dialog(`
+    <div class="dh"><h3>Episodes in title ${esc(t.label)}</h3><p>${esc(t.duration)} long · ${t.chapters || "?"} chapters</p></div>
+    <div class="content">
+      <div class="row" style="margin-bottom:14px"><span style="flex:1">How many episodes are in this title?</span>
+        <span class="stepper"><button data-d="-1">−</button><input id="eN" value="${eps}"><button data-d="1">+</button></span></div>
+      <label class="opt" data-how="split">
+        <span class="ot"><input type="radio" name="how">${icon("scissors", "width:16px;height:16px")}Split into separate episode files</span>
+        <div class="ob">
+          <div class="row"><span>New episodes start at chapters</span><input class="input mono" id="ePts" style="width:120px" spellcheck="false">
+            <button class="btn sm" id="eFill">Fill in</button></div>
+          <div class="hint" id="eHint" style="margin-top:6px"></div>
+          <div class="hint" style="margin-top:6px">Episode 1 always starts at chapter 1. Not sure? Play the disc in VLC and use Playback › Chapter.
+            If the split doesn't work out, the title is saved as one file instead, so nothing is lost.</div>
+        </div>
+      </label>
+      <label class="opt" data-how="whole">
+        <span class="ot"><input type="radio" name="how">${icon("file", "width:16px;height:16px")}Keep as one file with all the episodes</span>
+        <div class="ob"><div>Saved as <code class="mono" id="eWhole"></code></div>
+          <div class="hint" style="margin-top:4px">Plex lists every episode, but playing any of them plays the whole file.</div></div>
+      </label>
+      <div class="callout err" id="eErr" hidden style="margin:4px 0 0"></div>
+    </div>
+    <div class="df"><button class="btn ghost" data-single>It's just one episode</button><div class="spacer"></div>
+      <button class="btn" data-x>Cancel</button><button class="btn primary" data-ok>Save</button></div>`,
+  (d, close) => {
+    const N = d.querySelector("#eN"), P = d.querySelector("#ePts"), hint = d.querySelector("#eHint");
+    P.value = h && h.how === "split" ? h.pts.join(",") : "";
+    const nEps = () => Math.max(2, Math.min(50, parseInt(N.value) || 2));
+    const fill = () => {
+      const g = guessPts(t.chapters, nEps());
+      if (g) { P.value = g.join(","); hint.textContent = `Filled in ${t.chapters / nEps()} chapters per episode. It's a guess — check one episode change in VLC if you can.`; }
+      else hint.textContent = `${t.chapters} chapters don't divide evenly into ${nEps()} episodes, so type the chapters in yourself.`;
+    };
+    const sync = () => {
+      d.querySelectorAll(".opt").forEach(o => { o.classList.toggle("on", o.dataset.how === how); o.querySelector("input").checked = o.dataset.how === how; });
+      const f = firstEp(id); d.querySelector("#eWhole").textContent = multiName(f, f + nEps() - 1);
+    };
+    d.querySelectorAll(".opt").forEach(o => o.addEventListener("click", () => { how = o.dataset.how; sync(); }));
+    d.querySelectorAll(".stepper button").forEach(b => b.onclick = e => { e.preventDefault(); N.value = nEps() + +b.dataset.d; if (how === "split") fill(); sync(); });
+    N.oninput = () => { sync(); };
+    d.querySelector("#eFill").onclick = e => { e.preventDefault(); fill(); };
+    if (!P.value) fill();
+    sync();
+    d.querySelector("[data-x]").onclick = close;
+    d.querySelector("[data-single]").onclick = () => { delete S.how[id]; close(); refreshNames(); };
+    const save = () => {
+      const err = d.querySelector("#eErr");
+      try {
+        S.how[id] = how === "whole" ? { how: "whole", eps: nEps() } : { how: "split", pts: parsePts(P.value, t.chapters) };
+      } catch (e) { err.textContent = e.message; err.hidden = false; return; }
+      S.checked.add(id); close(); refreshNames();
+    };
+    d.querySelector("[data-ok]").onclick = save;
+    d.addEventListener("keydown", e => { if (e.key === "Enter") save(); });
+  });
+}
+
+function openSettings() {
+  const tools = B.tools || {};
+  const row = (key, pkg, path, what) => `
+    <div class="setrow"><div class="sh">${esc(pkg)}<span class="chip ${path ? "ok" : key === "makemkv" ? "bad" : "warn"}"><span class="dot"></span>${path ? "Installed" : "Not installed"}</span></div>
+      <div class="row"><input class="input grow1 mono" data-path="${key}" value="${esc(path)}" spellcheck="false" placeholder="Not found">
+        <button class="btn sm" data-browse="${key}">Browse…</button>
+        <button class="btn sm" data-install="${esc(pkg)}">${path ? "Update" : "Install"}</button></div>
+      <div class="hint">${what}</div></div>`;
+  dialog(`
+    <div class="dh"><h3>Settings</h3></div>
+    <div class="content">
+      ${row("makemkv", "MakeMKV", tools.makemkv || "", "Reads your discs. Installed and updated with Windows Package Manager (winget).")}
+      ${row("mkvmerge", "MKVToolNix", tools.mkvmerge || "", "Only needed to split a title into separate episodes.")}
+      <div class="setrow"><div class="sh">Scanning</div>
+        <div class="row"><span>Hide titles shorter than</span><input class="input num" id="sMin" type="number" min="0" step="30" value="${S.minlen}"><span>seconds</span></div>
+        <div class="hint">Lower this if a short episode or extra doesn't show up. Scan again after changing it.</div></div>
+      <div class="setrow"><div class="sh">About</div>
+        <div class="row"><span>${B.build ? `MKV Ripper build ${B.build}` : "MKV Ripper (running from source)"}</span><span class="hint" id="sUpd" style="margin:0"></span>
+          <div class="spacer"></div><button class="btn sm" id="sCheck">Check for updates</button></div></div>
+    </div>
+    <div class="df"><div class="spacer"></div><button class="btn primary" data-x>Done</button></div>`,
+  (d, close) => {
+    d.querySelector("[data-x]").onclick = close;
+    d.querySelectorAll("[data-browse]").forEach(b => b.onclick = async () => {
+      const p = await api.browse_tool(b.dataset.browse);
+      if (p) d.querySelector(`[data-path="${b.dataset.browse}"]`).value = p;
+    });
+    d.querySelectorAll("[data-path]").forEach(i => i.onchange = () => api.set_tool(i.dataset.path, i.value));
+    d.querySelectorAll("[data-install]").forEach(b => b.onclick = () => { close(); installTool(b.dataset.install); });
+    d.querySelector("#sMin").onchange = e => { S.minlen = Math.max(0, parseInt(e.target.value) || 0); persist(); };
+    d.querySelector("#sCheck").onclick = async () => {
+      const s = d.querySelector("#sUpd"); s.textContent = "Checking…";
+      const r = await api.check_update();
+      s.textContent = r.error ? r.error : r.latest ? "You have the latest build." : `Build ${r.build} is available — use the button at the top.`;
+    };
+  });
+}
+
+function installTool(pkg) {
+  const lic = pkg === "MakeMKV" ? "<p>MakeMKV has its own license and beta key; installing it means you accept its terms.</p>" : "";
+  confirmBox(`Install or update ${pkg}?`, `<p style="margin:0 0 8px">MKV Ripper will use Windows Package Manager (winget) to get the latest ${esc(pkg)}. Windows may ask for permission.</p>${lic}`,
+    "Continue", async () => { await api.install_tool(pkg); poll(); });
+}
+
+async function startRip(force = false) {
+  const r = await api.rip(request(), force);
+  if (r.error) return toast("error", r.error);
+  if (r.confirm === "overwrite")
+    return confirmBox("Replace existing files?", `These files are already in the folder and will be replaced:<div class="filelist">${r.files.map(esc).join("<br>")}</div>`,
+      "Replace and rip", () => startRip(true));
+  if (r.confirm === "nosplit")
+    return confirmBox("MKVToolNix isn't installed", `<p style="margin:0">Splitting needs MKVToolNix. You can install it from Settings, or rip now and keep those titles as one multi-episode file each (like <code class="mono">S1E1-E3.mkv</code>).</p>`,
+      "Rip as one file each", () => startRip(true));
+  poll();
+}
+
+function showResult(res) {
+  dialog(`<div class="dh"><h3>${icon("check", "width:20px;height:20px;color:var(--ok);vertical-align:-4px;margin-right:6px")}Done</h3>
+      <p>Saved ${res.done} file${res.done === 1 ? "" : "s"} to ${esc(res.out)}</p></div>
+    <div class="content">${res.notes.length ? `<div class="callout warn" style="display:block">${res.notes.map(esc).join("<br>")}</div>` : `<div class="hint" style="margin:0">Insert the next disc and scan it. For the next disc, set First episode to continue the numbering.</div>`}</div>
+    <div class="df"><div class="spacer"></div><button class="btn" data-open>${icon("folder")}Open folder</button><button class="btn primary" data-x>OK</button></div>`,
+  (d, close) => { d.querySelector("[data-x]").onclick = close; d.querySelector("[data-open]").onclick = () => api.open_folder(res.out); });
+}
+
+/* ---------- polling ---------- */
+async function poll() {
+  let st;
+  try { st = await api.get_state(logFrom); } catch (e) { return; }
+  const wasBusy = B.busy, prevTask = B.task;
+  B = st;
+  if (st.log && st.log.length) {
+    const lb = $("#logbox"), atEnd = lb.scrollTop + lb.clientHeight >= lb.scrollHeight - 4;
+    lb.textContent += st.log.join("\n") + "\n";
+    if (lb.textContent.length > 200000) lb.textContent = lb.textContent.slice(-150000);
+    if (atEnd) lb.scrollTop = lb.scrollHeight;
+  }
+  logFrom = st.log_end;
+  for (const n of st.notices || []) if (n.id > seenNotice) { seenNotice = n.id; toast(n.kind, n.text); }
+  if (st.scan_id !== seenScan) {          // a new scan: reset the choices
+    seenScan = st.scan_id;
+    S.checked = new Set(); S.how = {};
+    const pa = Object.values(st.play_all || {})[0];
+    if (pa && S.mode === "tv") pa.forEach(id => S.checked.add(id));
+    refreshNames();
+  }
+  if (wasBusy && !st.busy && prevTask === "rip" && st.result && st.result !== lastResult) { lastResult = st.result; showResult(st.result); }
+  renderHeader(); renderDisc(); renderFooter();
+  if (wasBusy !== st.busy) renderTitles();
+}
+
+/* ---------- wiring ---------- */
+function wire() {
+  $("#scanBtn").onclick = async () => { await api.scan(+$("#drive").value, S.minlen); poll(); };
+  $("#refreshBtn").onclick = async () => { await api.refresh_drives(); poll(); };
+  $("#drive").onchange = () => renderDisc();
+  $("#settingsBtn").onclick = openSettings;
+  $("#installMakeMKV").onclick = () => installTool("MakeMKV");
+  $("#updChip").onclick = () => confirmBox(`Update to build ${B.update.build}?`, "<p style='margin:0'>MKV Ripper will download the new version and restart.</p>",
+    "Update and restart", async () => { const r = await api.apply_update(); if (r.error) toast("error", r.error); });
+  $("#allBtn").onclick = () => { B.titles.forEach(t => { if (!isPlayAll(t)) S.checked.add(t.id); }); refreshNames(); };
+  $("#noneBtn").onclick = () => { S.checked.clear(); refreshNames(); };
+  $("#tlist").addEventListener("click", e => {
+    const pill = e.target.closest("[data-eps]");
+    if (pill) { openEpisodes(+pill.dataset.eps); return; }
+    const row = e.target.closest(".trow.t");
+    if (!row || B.busy) return;
+    const id = +row.dataset.id;
+    S.checked.has(id) ? S.checked.delete(id) : S.checked.add(id);
+    refreshNames();
+  });
+  document.querySelectorAll(".seg button").forEach(b => b.onclick = () => {
+    S.mode = b.dataset.mode; persist(); renderNaming(); refreshNames();
+  });
+  $("#prefix").oninput = e => { S.prefix = e.target.value; persist(); renderNaming(); refreshNames(); };
+  $("#start").oninput = e => { S.start = e.target.value; renderNaming(); refreshNames(); };
+  $("#movie").oninput = e => { S.movie = e.target.value; renderNaming(); refreshNames(); };
+  $("#out").oninput = e => { S.out = e.target.value; persist(); };
+  $("#browseOut").onclick = async () => { const p = await api.choose_folder(S.out); if (p) { S.out = p; $("#out").value = p; persist(); } };
+  $("#ripBtn").onclick = () => startRip(false);
+  $("#logBtn").onclick = () => { const l = $("#logbox"); l.hidden = !l.hidden; if (!l.hidden) l.scrollTop = l.scrollHeight; };
+}
+
+async function init() {
+  api = window.pywebview.api;
+  const st = await api.startup();
+  const s = st.settings || {};
+  S.mode = s.mode || "tv"; S.prefix = s.prefix ?? "S1E"; S.out = s.out || ""; S.minlen = +(s.minlen ?? 120);
+  $("#prefix").value = S.prefix; $("#out").value = S.out; $("#start").value = S.start;
+  B = st; logFrom = st.log_end || 0;
+  wire(); renderAll(); refreshNames();
+  setInterval(poll, 400);
+}
+if (window.pywebview && window.pywebview.api) init();
+else window.addEventListener("pywebviewready", init);
+</script>
+</body>
+</html>

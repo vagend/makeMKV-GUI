@@ -23,7 +23,9 @@ winget comes with Windows 11 and current Windows 10 as part of "App Installer". 
 
 ### Running from source (optional)
 
-With Python 3 installed: `python mkv_ripper.py`
+With Python 3 installed: `pip install pywebview`, then `python mkv_ripper.py`.
+
+The window is a web page (`web/index.html`) shown by pywebview using Windows' built-in WebView2; `mkv_core.py` holds the disc, rip, split and update logic.
 
 ### How releases work
 
