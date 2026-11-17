@@ -65,6 +65,7 @@ ATTR_CHAPTERS = 8
 ATTR_DURATION = 9
 ATTR_SIZE = 10
 ATTR_SOURCE = 16
+ATTR_SOURCE_TITLE = 24   # the disc's own title number on DVDs (what VLC's Title menu shows)
 ATTR_OUTPUT_NAME = 27
 
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
@@ -304,6 +305,8 @@ def scan_titles(exe, disc_index, minlength, on_line=None):
                 t["duration"] = value
             elif attr == ATTR_SIZE:
                 t["size"] = value
+            elif attr == ATTR_SOURCE_TITLE and value.strip().isdigit():
+                t["dvd"] = int(value)
             elif attr == ATTR_SOURCE:
                 t["source"] = value
             elif attr == ATTR_OUTPUT_NAME:
@@ -328,6 +331,32 @@ def build_movie_names(movie, count, ext=".mkv"):
     names = [os.path.join(movie, f"{movie}{ext}")] if count else []
     names += [os.path.join(movie, f"Extra {i}-other{ext}") for i in range(1, count)]
     return names
+
+
+def find_play_all(titles):
+    """Find a 'Play all' title: a long title whose length matches a run of shorter titles
+    back to back (e.g. title 1 = titles 3+4+5). Returns {play_all_id: [episode ids]}."""
+    secs = {t["id"]: duration_seconds(t.get("duration", "")) for t in titles}
+    ordered = sorted(titles, key=lambda t: t.get("dvd", t["id"]))
+    found = {}
+    for big in titles:
+        total = secs[big["id"]]
+        if total < 50 * 60:
+            continue
+        cands = [t for t in ordered if t["id"] != big["id"] and 10 * 60 <= secs[t["id"]] <= total * 0.75]
+        best = None
+        for i in range(len(cands)):
+            run = 0
+            for j in range(i, len(cands)):
+                run += secs[cands[j]["id"]]
+                if run > total + 120:
+                    break
+                if j > i and abs(run - total) <= max(90, total * 0.02):
+                    if best is None or abs(run - total) < best[0]:
+                        best = (abs(run - total), [c["id"] for c in cands[i:j + 1]])
+        if best:
+            found[big["id"]] = best[1]
+    return found
 
 
 def check_prefix(prefix):
@@ -432,6 +461,11 @@ def set_dark_titlebar(win, dark):
         pass
 
 
+def tlabel(t):
+    """Title number to show: the disc's own number (matches VLC) when MakeMKV reports it."""
+    return str(t.get("dvd", t["id"]))
+
+
 def duration_seconds(text):
     try:
         parts = [int(p) for p in text.split(":")]
@@ -495,11 +529,13 @@ class App(tk.Tk):
         self.drives = [(0, "HL-DT-ST BD-RE WH16NS40", "BELGRAVIA_D1")]
         self._set_drives(self.drives)
         self._set_titles([
-            {"id": 0, "duration": "2:15:01", "chapters": "15", "size": "4.1 GB"},
-            {"id": 1, "duration": "0:12:04", "chapters": "3", "size": "310.2 MB"},
-            {"id": 2, "duration": "0:02:31", "chapters": "1", "size": "64.0 MB"},
+            {"id": 0, "dvd": 1, "duration": "2:15:01", "chapters": "15", "size": "4.1 GB"},
+            {"id": 1, "dvd": 2, "duration": "0:02:31", "chapters": "1", "size": "64.0 MB"},
+            {"id": 2, "dvd": 3, "duration": "0:45:10", "chapters": "5", "size": "1.4 GB"},
+            {"id": 3, "dvd": 4, "duration": "0:44:58", "chapters": "5", "size": "1.4 GB"},
+            {"id": 4, "dvd": 5, "duration": "0:44:53", "chapters": "5", "size": "1.3 GB"},
+            {"id": 5, "dvd": 7, "duration": "0:12:04", "chapters": "3", "size": "310.2 MB"},
         ])
-        self.checked = {0}
         self.prefix_var.set("Belgravia (2020) - S01E0")
         self.out_var.set(r"D:\Plex\TV Shows\Belgravia (2020)\Season 01")
         self.status_var.set("Found 3 title(s). Check the ones to rip.")
@@ -733,9 +769,9 @@ class App(tk.Tk):
         tf.pack(fill="both", expand=True)
         cols = ("chk", "id", "duration", "chapters", "size", "episodes", "newname")
         self.tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="browse", height=7)
-        heads = {"chk": "Rip", "id": "Title", "duration": "Length", "chapters": "Chapters", "size": "Size",
+        heads = {"chk": "Rip", "id": "Disc title", "duration": "Length", "chapters": "Chapters", "size": "Size",
                  "episodes": "Episodes", "newname": "Saved as"}
-        widths = {"chk": 50, "id": 60, "duration": 90, "chapters": 80, "size": 90, "episodes": 150, "newname": 380}
+        widths = {"chk": 50, "id": 85, "duration": 90, "chapters": 80, "size": 90, "episodes": 150, "newname": 380}
         for c in cols:
             self.tree.heading(c, text=heads[c])
             self.tree.column(c, width=widths[c], minwidth=40, stretch=(c == "newname"),
@@ -754,6 +790,7 @@ class App(tk.Tk):
                                    text="Insert a disc and click Scan disc. Click a row's box to rip it; "
                                         "click its Episodes cell to split it into episodes.")
         self.empty_lbl.pack(anchor="w", pady=(8, 0))
+        self.info_lbl = ttk.Label(c2, style="Muted.TLabel", wraplength=900, justify="left")
         self.hint_row = ttk.Frame(c2)
         self.hint_lbl = ttk.Label(self.hint_row, style="Hint.TLabel")
         self.hint_lbl.pack(side="left")
@@ -964,10 +1001,24 @@ class App(tk.Tk):
         self.splits = {}
         self.whole = {}
         self.tree.delete(*self.tree.get_children())
+        self.play_all = find_play_all(titles)
         for t in titles:
             self.tree.insert("", "end", iid=str(t["id"]), values=(
-                CHECK_OFF, t["id"], t.get("duration", ""),
+                CHECK_OFF, tlabel(t), t.get("duration", ""),
                 t.get("chapters", ""), t.get("size", ""), "", ""))
+        self.info_lbl.pack_forget()
+        if self.play_all:
+            big, eps = next(iter(self.play_all.items()))
+            by_id = {t["id"]: t for t in titles}
+            nums = ", ".join(tlabel(by_id[e]) for e in eps)
+            if self.mode_var.get() == "tv":
+                self.checked = set(eps)
+                msg = (f"\u2714  Title {tlabel(by_id[big])} is 'Play all': titles {nums} back to back. "
+                       f"Those episode titles are selected for you, in order.")
+            else:
+                msg = f"Title {tlabel(by_id[big])} looks like 'Play all' (titles {nums} back to back)."
+            self.info_lbl.configure(text=msg)
+            self.info_lbl.pack(anchor="w", pady=(8, 0))
         if titles:
             first = str(titles[0]["id"])
             self.tree.focus(first)
@@ -1043,7 +1094,8 @@ class App(tk.Tk):
         except ValueError:
             chapters = 0
         return (self.mode_var.get() == "tv" and duration_seconds(t.get("duration", "")) >= 70 * 60
-                and chapters >= 4 and not self.splits.get(t["id"]) and not self.whole.get(t["id"]))
+                and chapters >= 4 and not self.splits.get(t["id"]) and not self.whole.get(t["id"])
+                and t["id"] not in getattr(self, "play_all", {}))
 
     def _refresh_names(self):
         movie_mode = self.mode_var.get() == "movie"
@@ -1075,6 +1127,8 @@ class App(tk.Tk):
             multi = self._likely_multi(t)
             if movie_mode:
                 eps = "\u2014"
+            elif t["id"] in getattr(self, "play_all", {}):
+                eps = "Play all (skip)"
             elif pts:
                 eps = f"{len(pts) + 1}   \u2702 at ch. {','.join(map(str, pts))}"
             elif self.whole.get(t["id"], 0) > 1:
@@ -1098,7 +1152,7 @@ class App(tk.Tk):
             self.empty_lbl.pack_forget()
         if self.hinted is not None:
             t = self.hinted
-            self.hint_lbl.configure(text=f"\u26a0  Title {t['id']} is {t.get('duration', '')} long. It probably holds "
+            self.hint_lbl.configure(text=f"\u26a0  Title {tlabel(t)} is {t.get('duration', '')} long. It probably holds "
                                          f"several episodes.")
             self.hint_row.pack(anchor="w", pady=(8, 0))
         else:
@@ -1143,13 +1197,13 @@ class App(tk.Tk):
         mins = duration_seconds(t.get("duration", "")) // 60
 
         win = tk.Toplevel(self)
-        win.title(f"Episodes in title {tid}")
+        win.title(f"Episodes in title {tlabel(t)}")
         win.transient(self)
         win.resizable(False, False)
         set_dark_titlebar(win, self.dark)
         frm = ttk.Frame(win, padding=20)
         frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Title {tid} holds several episodes", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(frm, text=f"Title {tlabel(t)} holds several episodes", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(frm, text=f"{t.get('duration', '')} long  \u00b7  {chapters or '?'} chapters",
                   style="Muted.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
 
@@ -1318,8 +1372,8 @@ class App(tk.Tk):
             try:
                 for n, (t, paths, pts, fallback) in enumerate(plan, 1):
                     label = os.path.basename(paths[0]) + (f" ... {os.path.basename(paths[-1])}" if len(paths) > 1 else "")
-                    self.post("status", f"Ripping title {t['id']} -> {label} ({n} of {len(plan)})")
-                    self.post("log", f"--- Title {t['id']} -> {label}")
+                    self.post("status", f"Ripping title {tlabel(t)} -> {label} ({n} of {len(plan)})")
+                    self.post("log", f"--- Title {tlabel(t)} -> {label}")
                     self.post("progress", 0)
                     if pts:
                         self.post("log", f"Will split before chapters {','.join(map(str, pts))}")
@@ -1327,7 +1381,7 @@ class App(tk.Tk):
                                        mkvmerge=mkvmerge, split_points=pts, on_split_progress=split_progress,
                                        fallback_path=fallback)
                     if result.startswith("fallback"):
-                        msg = (f"Title {t['id']}: couldn't split ({result.split(': ', 1)[1]}), so it was saved as "
+                        msg = (f"Title {tlabel(t)}: couldn't split ({result.split(': ', 1)[1]}), so it was saved as "
                                f"one file: {os.path.basename(fallback)}")
                         self.post("log", msg)
                         notes.append(msg)
