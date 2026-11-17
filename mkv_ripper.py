@@ -315,6 +315,13 @@ def build_names(prefix, start, count, ext=".mkv"):
     return [f"{prefix}{start + i}{ext}" for i in range(count)]
 
 
+def build_multi_name(prefix, first, last, ext=".mkv"):
+    """One file holding several episodes, in Plex's multi-episode form: S1E1-E3, S01E01-E03."""
+    m = re.search(r"[Ee](0*)$", prefix)
+    pad = m.group(1) if m else ""
+    return f"{prefix}{first}-E{pad}{last}{ext}"
+
+
 def build_movie_names(movie, count, ext=".mkv"):
     """First checked title is the movie; any others become Plex 'other' extras.
     Paths are relative to the output folder: '<movie>/<movie>.mkv', '<movie>/Extra 1-other.mkv', ..."""
@@ -329,9 +336,11 @@ def check_prefix(prefix):
 
 
 def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
-              mkvmerge=None, split_points=None, on_split_progress=None):
+              mkvmerge=None, split_points=None, on_split_progress=None, fallback_path=None):
     """Rip one title into a temp folder, optionally split it at chapters, then move the
-    result(s) to final_paths (one path, or one per episode when splitting)."""
+    result(s) to final_paths (one path, or one per episode when splitting).
+    If splitting fails and fallback_path is given, the whole rip is saved there instead
+    (a multi-episode file like S1E1-E3.mkv). Returns 'ok' or 'fallback: <reason>'."""
     if isinstance(final_paths, str):
         final_paths = [final_paths]
     out_dir = os.path.dirname(final_paths[0])
@@ -347,9 +356,19 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
 
         if not split_points:
             os.replace(ripped, final_paths[0])
-            return
+            return "ok"
 
-        parts = split_file(mkvmerge, ripped, split_points, os.path.join(tmp, "parts"), on_split_progress)
+        try:
+            if not mkvmerge or not os.path.isfile(mkvmerge):
+                raise RuntimeError("MKVToolNix (mkvmerge) isn't installed")
+            parts = split_file(mkvmerge, ripped, split_points, os.path.join(tmp, "parts"), on_split_progress)
+            if len(parts) != len(final_paths):
+                raise RuntimeError(f"expected {len(final_paths)} episodes but the split made {len(parts)}")
+        except Exception as e:
+            if not fallback_path:
+                raise
+            os.replace(ripped, fallback_path)
+            return f"fallback: {e}"
         if len(parts) != len(final_paths):
             # Don't lose the rip: keep the unsplit file so it can be split by hand.
             base, ext = os.path.splitext(final_paths[0])
@@ -359,6 +378,7 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
                                f"made {len(parts)}. The unsplit rip was kept as:\n{keep}")
         for part, dest in zip(parts, final_paths):
             os.replace(part, dest)
+        return "ok"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -447,6 +467,7 @@ class App(tk.Tk):
         self.titles = []          # title dicts
         self.checked = set()      # title ids
         self.splits = {}          # title id -> [chapters where a new episode starts]
+        self.whole = {}           # title id -> episode count kept in ONE file (S1E1-E3)
         self.scanned_minlen = 120
         self.scanned_disc = 0
         self.busy = False
@@ -941,6 +962,7 @@ class App(tk.Tk):
         self.titles = titles
         self.checked = set()
         self.splits = {}
+        self.whole = {}
         self.tree.delete(*self.tree.get_children())
         for t in titles:
             self.tree.insert("", "end", iid=str(t["id"]), values=(
@@ -995,15 +1017,22 @@ class App(tk.Tk):
             if not movie:
                 return None
             names = build_movie_names(movie, len(order))
-            return [(t, [n], []) for t, n in zip(order, names)]   # splitting is a TV-only feature
+            return [(t, [n], [], None) for t, n in zip(order, names)]   # splitting is a TV-only feature
         start = self._start()
         if start is None:
             return None
         plan, ep = [], start
+        prefix = self.prefix_var.get()
         for t in order:
             pts = self.splits.get(t["id"], [])
+            whole = self.whole.get(t["id"], 0)
+            if whole > 1:
+                plan.append((t, [build_multi_name(prefix, ep, ep + whole - 1)], [], None))
+                ep += whole
+                continue
             count = len(pts) + 1
-            plan.append((t, build_names(self.prefix_var.get(), ep, count), pts))
+            fallback = build_multi_name(prefix, ep, ep + count - 1) if pts else None
+            plan.append((t, build_names(prefix, ep, count), pts, fallback))
             ep += count
         return plan
 
@@ -1014,7 +1043,7 @@ class App(tk.Tk):
         except ValueError:
             chapters = 0
         return (self.mode_var.get() == "tv" and duration_seconds(t.get("duration", "")) >= 70 * 60
-                and chapters >= 4 and not self.splits.get(t["id"]))
+                and chapters >= 4 and not self.splits.get(t["id"]) and not self.whole.get(t["id"]))
 
     def _refresh_names(self):
         movie_mode = self.mode_var.get() == "movie"
@@ -1036,7 +1065,7 @@ class App(tk.Tk):
                          + ",  ".join(build_names(self.prefix_var.get(), start, 3)) + "  ...")
         order = [t for t in self.titles if t["id"] in self.checked]
         plan = self._plan(order) or []
-        name_for = {t["id"]: names for t, names, _ in plan}
+        name_for = {t["id"]: names for t, names, _, _ in plan}
         self.hinted = None
         for t in self.titles:
             iid = str(t["id"])
@@ -1048,6 +1077,8 @@ class App(tk.Tk):
                 eps = "\u2014"
             elif pts:
                 eps = f"{len(pts) + 1}   \u2702 at ch. {','.join(map(str, pts))}"
+            elif self.whole.get(t["id"], 0) > 1:
+                eps = f"{self.whole[t['id']]}   in one file"
             elif multi:
                 eps = "1   \u26a0 split?"
             else:
@@ -1089,11 +1120,22 @@ class App(tk.Tk):
             self.tree.selection_set(iid)
             self.edit_split()
 
+    def _first_episode(self, tid):
+        """Episode number the given title would start at, counting checked titles above it."""
+        ep = self._start() or 1
+        for t in self.titles:
+            if t["id"] == tid:
+                return ep
+            if t["id"] in self.checked:
+                ep += self.whole.get(t["id"], 0) or (len(self.splits.get(t["id"], [])) + 1)
+        return ep
+
     def edit_split(self):
         iid = self.tree.focus()
         if not iid or self.busy:
             return
         t = next(x for x in self.titles if str(x["id"]) == iid)
+        tid = t["id"]
         try:
             chapters = int(t.get("chapters", "0"))
         except ValueError:
@@ -1101,41 +1143,63 @@ class App(tk.Tk):
         mins = duration_seconds(t.get("duration", "")) // 60
 
         win = tk.Toplevel(self)
-        win.title(f"Split title {t['id']}")
+        win.title(f"Episodes in title {tid}")
         win.transient(self)
         win.resizable(False, False)
         set_dark_titlebar(win, self.dark)
         frm = ttk.Frame(win, padding=20)
         frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Split title {t['id']} into episodes", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(frm, text=f"Title {tid} holds several episodes", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
         ttk.Label(frm, text=f"{t.get('duration', '')} long  \u00b7  {chapters or '?'} chapters",
                   style="Muted.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
 
-        # easy way: how many episodes
         ttk.Label(frm, text="How many episodes are on this title?").grid(row=2, column=0, sticky="w")
-        guess_eps = max(2, len(self.splits.get(t["id"], [])) + 1)
-        if not self.splits.get(t["id"]) and mins >= 70:
-            guess_eps = max(2, round(mins / 45))      # typical hour-long-slot drama runs ~45 min
+        if self.whole.get(tid):
+            guess_eps = self.whole[tid]
+        elif self.splits.get(tid):
+            guess_eps = len(self.splits[tid]) + 1
+        else:
+            guess_eps = max(2, round(mins / 45)) if mins >= 70 else 2   # hour-slot dramas run ~45 min
         eps_var = tk.StringVar(value=str(guess_eps))
         ttk.Spinbox(frm, from_=2, to=50, textvariable=eps_var, width=5).grid(row=2, column=1, sticky="w", padx=8)
-        ttk.Button(frm, text="Fill in chapters", command=lambda: guess()).grid(row=2, column=2, sticky="w")
 
-        ttk.Label(frm, text="New episodes start at chapters").grid(row=3, column=0, sticky="w", pady=(14, 0))
-        pts_var = tk.StringVar(value=",".join(map(str, self.splits.get(t["id"], []))))
-        entry = ttk.Entry(frm, textvariable=pts_var, width=20)
-        entry.grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(14, 0))
-        hint = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=460, justify="left")
-        hint.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
-        ttk.Label(frm, style="Muted.TLabel", wraplength=460, justify="left", text=(
-            "List the chapter where episode 2, 3, ... begins (episode 1 always starts at chapter 1). "
-            "Example for 3 episodes: 6,11. If unsure, play the disc in VLC and use Playback > Chapter "
-            "to see where each episode's opening starts.")).grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        how = tk.StringVar(value="whole" if self.whole.get(tid) else "split")
+
+        # option 1: split
+        ttk.Radiobutton(frm, text="Split into separate episode files", value="split", variable=how,
+                        command=lambda: sync()).grid(row=3, column=0, columnspan=3, sticky="w", pady=(16, 4))
+        sp = ttk.Frame(frm)
+        sp.grid(row=4, column=0, columnspan=3, sticky="w", padx=(28, 0))
+        ttk.Label(sp, text="New episodes start at chapters").pack(side="left")
+        pts_var = tk.StringVar(value=",".join(map(str, self.splits.get(tid, []))))
+        entry = ttk.Entry(sp, textvariable=pts_var, width=14)
+        entry.pack(side="left", padx=8)
+        fill_btn = ttk.Button(sp, text="Fill in", command=lambda: guess())
+        fill_btn.pack(side="left")
+        hint = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=470, justify="left")
+        hint.grid(row=5, column=0, columnspan=3, sticky="w", padx=(28, 0), pady=(4, 0))
+        ttk.Label(frm, style="Muted.TLabel", wraplength=470, justify="left", text=(
+            "Episode 1 always starts at chapter 1. If unsure, play the disc in VLC and use Playback > Chapter. "
+            "If the split doesn't work out during the rip, the title is saved as one file instead "
+            "(see below), so nothing is lost.")).grid(row=6, column=0, columnspan=3, sticky="w", padx=(28, 0), pady=(4, 0))
+
+        # option 2: keep whole
+        ttk.Radiobutton(frm, text="Keep as one file with all the episodes", value="whole", variable=how,
+                        command=lambda: sync()).grid(row=7, column=0, columnspan=3, sticky="w", pady=(16, 4))
+        whole_lbl = ttk.Label(frm, text="", wraplength=470, justify="left")
+        whole_lbl.grid(row=8, column=0, columnspan=3, sticky="w", padx=(28, 0))
+        ttk.Label(frm, style="Muted.TLabel", wraplength=470, justify="left", text=(
+            "Plex lists every episode, but playing any of them plays the whole file. No MKVToolNix needed.")
+                  ).grid(row=9, column=0, columnspan=3, sticky="w", padx=(28, 0), pady=(2, 0))
+
+        def n_eps():
+            try:
+                return max(2, int(eps_var.get()))
+            except ValueError:
+                return 2
 
         def guess():
-            try:
-                n = int(eps_var.get())
-            except ValueError:
-                return
+            n = n_eps()
             g = guess_split_points(chapters, n)
             if g is None:
                 hint.configure(text=f"{chapters} chapters don't divide evenly into {n} episodes, so type "
@@ -1144,33 +1208,50 @@ class App(tk.Tk):
                 pts_var.set(",".join(map(str, g)))
                 hint.configure(text=f"Filled in {chapters // n} chapters per episode. This is a guess: check one "
                                     "episode change in VLC if you can.")
+
+        def sync(*_):
+            first = self._first_episode(tid)
+            name = build_multi_name(self.prefix_var.get(), first, first + n_eps() - 1)
+            whole_lbl.configure(text=f"Saved as  {name}")
+            state = "normal" if how.get() == "split" else "disabled"
+            entry.configure(state=state)
+            fill_btn.configure(state=state)
+        eps_var.trace_add("write", sync)
         if not pts_var.get():
             guess()
+        sync()
 
         def save():
-            try:
-                pts = parse_split_points(pts_var.get(), chapters or None)
-            except ValueError as e:
-                messagebox.showerror("MKV Ripper", str(e), parent=win)
-                return
-            if pts:
-                self.splits[t["id"]] = pts
-                self.checked.add(t["id"])
+            self.splits.pop(tid, None)
+            self.whole.pop(tid, None)
+            if how.get() == "whole":
+                self.whole[tid] = n_eps()
             else:
-                self.splits.pop(t["id"], None)
+                try:
+                    pts = parse_split_points(pts_var.get(), chapters or None)
+                except ValueError as e:
+                    messagebox.showerror("MKV Ripper", str(e), parent=win)
+                    return
+                if not pts:
+                    messagebox.showerror("MKV Ripper", "Enter the chapters where episodes start, or click Fill in.",
+                                         parent=win)
+                    return
+                self.splits[tid] = pts
+            self.checked.add(tid)
             self._refresh_names()
             win.destroy()
 
-        def clear():
-            pts_var.set("")
-            save()
+        def single():
+            self.splits.pop(tid, None)
+            self.whole.pop(tid, None)
+            self._refresh_names()
+            win.destroy()
 
         btns = ttk.Frame(frm)
-        btns.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(18, 0))
-        ttk.Button(btns, text="Don't split", command=clear).pack(side="left")
-        ttk.Button(btns, text="Split", style="Accent.TButton", width=10, command=save).pack(side="right")
+        btns.grid(row=10, column=0, columnspan=3, sticky="ew", pady=(20, 0))
+        ttk.Button(btns, text="It's just one episode", command=single).pack(side="left")
+        ttk.Button(btns, text="Save", style="Accent.TButton", width=10, command=save).pack(side="right")
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=8)
-        entry.focus_set()
         win.bind("<Return>", lambda _e: save())
         win.bind("<Escape>", lambda _e: win.destroy())
         win.grab_set()
@@ -1209,16 +1290,18 @@ class App(tk.Tk):
             messagebox.showerror("MKV Ripper", "Choose an output folder.")
             return
 
-        plan = [(t, [os.path.join(out, n) for n in names], pts) for t, names, pts in self._plan(order)]
+        plan = [(t, [os.path.join(out, n) for n in names], pts, fb and os.path.join(out, fb))
+                for t, names, pts, fb in self._plan(order)]
         mkvmerge = self.mkvmerge_var.get().strip()
-        if any(pts for _, _, pts in plan) and not os.path.isfile(mkvmerge):
-            messagebox.showerror("MKV Ripper", "Splitting needs MKVToolNix's mkvmerge.exe. Install MKVToolNix "
-                                 "(free, mkvtoolnix.download) or use the mkvmerge Browse... button.")
-            return
-        for _, paths, _ in plan:
+        if any(pts for _, _, pts, _ in plan) and not os.path.isfile(mkvmerge):
+            if not messagebox.askyesno(
+                    "MKV Ripper", "Splitting needs MKVToolNix, which isn't installed (Settings > Install / update).\n\n"
+                                  "Rip anyway and keep those titles as one multi-episode file each (like S1E1-E3)?"):
+                return
+        for _, paths, _, _ in plan:
             for p in paths:
                 os.makedirs(os.path.dirname(p), exist_ok=True)
-        existing = [os.path.basename(p) for _, paths, _ in plan for p in paths if os.path.exists(p)]
+        existing = [os.path.basename(p) for _, paths, _, _ in plan for p in paths if os.path.exists(p)]
         if existing and not messagebox.askyesno(
                 "MKV Ripper", "These files already exist and will be replaced:\n\n"
                 + "\n".join(existing) + "\n\nContinue?"):
@@ -1231,21 +1314,29 @@ class App(tk.Tk):
             self.post("progress", pct * 65536 // 100)
 
         def work():
-            done = 0
+            done, notes = 0, []
             try:
-                for n, (t, paths, pts) in enumerate(plan, 1):
+                for n, (t, paths, pts, fallback) in enumerate(plan, 1):
                     label = os.path.basename(paths[0]) + (f" ... {os.path.basename(paths[-1])}" if len(paths) > 1 else "")
                     self.post("status", f"Ripping title {t['id']} -> {label} ({n} of {len(plan)})")
                     self.post("log", f"--- Title {t['id']} -> {label}")
                     self.post("progress", 0)
                     if pts:
                         self.post("log", f"Will split before chapters {','.join(map(str, pts))}")
-                    rip_title(exe, disc, minlen, t["id"], paths, self._robot_handler,
-                              mkvmerge=mkvmerge, split_points=pts, on_split_progress=split_progress)
-                    done += len(paths)
+                    result = rip_title(exe, disc, minlen, t["id"], paths, self._robot_handler,
+                                       mkvmerge=mkvmerge, split_points=pts, on_split_progress=split_progress,
+                                       fallback_path=fallback)
+                    if result.startswith("fallback"):
+                        msg = (f"Title {t['id']}: couldn't split ({result.split(': ', 1)[1]}), so it was saved as "
+                               f"one file: {os.path.basename(fallback)}")
+                        self.post("log", msg)
+                        notes.append(msg)
+                        done += 1
+                    else:
+                        done += len(paths)
                 self.post("progress", 65536)
                 self.post("status", f"Done. Saved {done} file(s) to {out}")
-                self.post("info", f"Finished. {done} file(s) saved to:\n{out}")
+                self.post("info", f"Finished. {done} file(s) saved to:\n{out}" + ("\n\n" + "\n".join(notes) if notes else ""))
             except Exception as e:
                 self.post("error", f"Stopped after {done} file(s):\n{e}")
                 self.post("status", "Stopped with an error.")
