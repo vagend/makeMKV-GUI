@@ -6,22 +6,27 @@ A small Windows front end for MakeMKV that rips the titles you pick and names th
 - **Split titles:** if a disc stores several episodes as one big title, enter the chapters where each new episode starts (e.g. `6,11`). After ripping, MKVToolNix splits it losslessly and each piece gets the next episode number.
 - **Movie mode:** give the movie name and year (e.g. `The Matrix (1999)`). The first checked title is saved as `The Matrix (1999)\The Matrix (1999).mkv`; any other checked titles are saved beside it as Plex extras (`Extra 1-other.mkv`, …).
 
-## Requirements
+## Download and run
 
-- Windows
-- [Python 3](https://www.python.org/downloads/) (the python.org installer includes tkinter)
-- [MakeMKV](https://www.makemkv.com/) — found automatically in `C:\Program Files (x86)\MakeMKV`
-- [MKVToolNix](https://mkvtoolnix.download/) — only needed for splitting; found automatically in `C:\Program Files\MKVToolNix`
+1. Go to [Releases](https://github.com/vagend/makeMKV-GUI/releases/latest) and download **MKVRipper.exe**. No Python needed.
+2. Run it. If MakeMKV or MKVToolNix isn't installed, the app offers to install it with Windows Package Manager (winget). Windows may ask for permission.
 
-If either tool is installed somewhere else, use its **Browse...** button in the app.
+Windows SmartScreen may warn about the exe because it isn't code-signed. Click **More info > Run anyway**.
 
-## Run
+### Staying up to date
 
-```
-python mkv_ripper.py
-```
+- **The app** checks GitHub for a newer release when it starts and offers to update and restart.
+- **MakeMKV and MKVToolNix:** use **Tools > Install / update …** to upgrade them through winget.
 
-or double-click `mkv_ripper.py`.
+winget comes with Windows 11 and current Windows 10 as part of "App Installer". If it's missing, install **App Installer** from the Microsoft Store.
+
+### Running from source (optional)
+
+With Python 3 installed: `python mkv_ripper.py`
+
+### Releasing a new version
+
+Bump `APP_VERSION` in `mkv_ripper.py`, commit, then push a matching tag (e.g. `git tag v1.0.1 && git push origin v1.0.1`). GitHub Actions builds `MKVRipper.exe` and publishes the release.
 
 ## Usage
 

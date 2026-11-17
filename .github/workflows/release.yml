@@ -1,0 +1,49 @@
+name: Build MKVRipper.exe
+
+# Push a tag like v1.0.1 to build the exe and publish it as a GitHub Release.
+# The app's "Check for update" downloads MKVRipper.exe from the latest release,
+# so bump APP_VERSION in mkv_ripper.py to match the tag before tagging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check APP_VERSION matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $line = Select-String -Path mkv_ripper.py -Pattern '^APP_VERSION = "(.+)"'
+          $ver = $line.Matches[0].Groups[1].Value
+          if ($ver -ne $tag) { Write-Error "APP_VERSION is $ver but tag is $tag"; exit 1 }
+
+      - name: Build exe
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          pyinstaller --onefile --windowed --name MKVRipper mkv_ripper.py
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MKVRipper
+          path: dist/MKVRipper.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/MKVRipper.exe --title "MKV Ripper ${{ github.ref_name }}" --generate-notes

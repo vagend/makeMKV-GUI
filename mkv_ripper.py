@@ -18,13 +18,16 @@ Movie mode: type the movie name and year instead, e.g.  The Matrix (1999).
 The first checked title is saved as  The Matrix (1999)\The Matrix (1999).mkv
 and any other checked titles go in the same folder as Plex extras (Extra 1-other.mkv ...).
 
-Requires: Windows, Python 3 (python.org installer includes tkinter), MakeMKV installed.
-Splitting also needs MKVToolNix (free, mkvtoolnix.download).
+Requires Windows. The released MKVRipper.exe needs no Python. The Tools menu installs
+and updates MakeMKV and MKVToolNix through winget, and the app checks GitHub for
+newer versions of itself.
 """
 
 import re
 
 import csv
+import json
+import urllib.request
 import os
 import queue
 import shutil
@@ -75,6 +78,92 @@ def find_mkvmerge():
         if os.path.isfile(p):
             return p
     return shutil.which("mkvmerge") or ""
+
+
+# ----------------------------------------------------------------------------
+# Dependencies (winget) and app self-update (GitHub Releases)
+# ----------------------------------------------------------------------------
+
+APP_VERSION = "1.0.0"
+GITHUB_REPO = "vagend/makeMKV-GUI"
+EXE_ASSET = "MKVRipper.exe"
+WINGET_IDS = {"MakeMKV": "GuinpinSoft.MakeMKV", "MKVToolNix": "MoritzBunkus.MKVToolNix"}
+
+
+def find_winget():
+    w = shutil.which("winget")
+    if w:
+        return w
+    p = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps", "winget.exe")
+    return p if os.path.isfile(p) else ""
+
+
+def winget_run(action, package, on_line=None):
+    """action is 'install' or 'upgrade'. Returns (exit code, last lines of output)."""
+    winget = find_winget()
+    if not winget:
+        raise RuntimeError("winget (Windows Package Manager) isn't available. Install or update "
+                           "'App Installer' from the Microsoft Store, then try again.")
+    args = [winget, action, "--id", WINGET_IDS[package], "-e", "--silent",
+            "--accept-package-agreements", "--accept-source-agreements"]
+    proc = _popen(args)
+    tail = []
+    for line in proc.stdout:
+        line = line.strip().strip("\x08").strip()
+        if not line or set(line) <= set("-\\|/ ") or any(c in line for c in "█▒░"):  # spinner/progress noise
+            continue
+        tail = (tail + [line])[-6:]
+        if on_line:
+            on_line(line)
+    proc.wait()
+    return proc.returncode, tail
+
+
+def parse_version(text):
+    nums = re.findall(r"\d+", text or "")
+    return tuple(int(n) for n in nums[:3]) if nums else (0,)
+
+
+def latest_release():
+    """Return (version tag, download URL of MKVRipper.exe or None) from GitHub."""
+    req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                                 headers={"Accept": "application/vnd.github+json",
+                                          "User-Agent": "MKVRipper"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        data = json.load(r)
+    url = next((a["browser_download_url"] for a in data.get("assets", [])
+                if a.get("name", "").lower() == EXE_ASSET.lower()), None)
+    return data.get("tag_name", ""), url
+
+
+def is_frozen():
+    return bool(getattr(sys, "frozen", False))
+
+
+def cleanup_old_exe():
+    if is_frozen():
+        try:
+            os.remove(sys.executable + ".old")
+        except OSError:
+            pass
+
+
+def install_update(url):
+    """Download the new exe, swap it in for the running one, and start it."""
+    exe = sys.executable
+    new, old = exe + ".new", exe + ".old"
+    req = urllib.request.Request(url, headers={"User-Agent": "MKVRipper"})
+    with urllib.request.urlopen(req, timeout=120) as r, open(new, "wb") as f:
+        shutil.copyfileobj(r, f)
+    if os.path.getsize(new) < 1_000_000:
+        os.remove(new)
+        raise RuntimeError("The downloaded update looks incomplete; nothing was changed.")
+    if os.path.exists(old):
+        os.remove(old)
+    os.replace(exe, old)        # Windows allows renaming a running exe
+    os.replace(new, exe)
+    env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
+    subprocess.Popen([exe], env=env, close_fds=True)
 
 
 def parse_split_points(text, chapters=None):
@@ -265,7 +354,6 @@ CHECK_ON, CHECK_OFF = "\u2611", "\u2610"
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("MKV Ripper")
         self.geometry("940x640")
         self.minsize(760, 500)
 
@@ -289,12 +377,120 @@ class App(tk.Tk):
         self.busy = False
         self.msgs = queue.Queue()
 
+        cleanup_old_exe()
+        self.title(f"MKV Ripper {APP_VERSION}")
+        self._build_menu()
         self._build()
         for v in (self.prefix_var, self.start_var, self.movie_var, self.mode_var):
             v.trace_add("write", lambda *_: self._refresh_names())
         self.after(100, self._pump)
         if self.exe_var.get():
             self.refresh_drives()
+        self.after(800, self._startup_checks)
+
+    # ---- dependencies & updates ----
+    def _build_menu(self):
+        bar = tk.Menu(self)
+        tools = tk.Menu(bar, tearoff=False)
+        tools.add_command(label="Install / update MakeMKV", command=lambda: self.dep_action("MakeMKV"))
+        tools.add_command(label="Install / update MKVToolNix", command=lambda: self.dep_action("MKVToolNix"))
+        tools.add_separator()
+        tools.add_command(label="Check for MKV Ripper update", command=lambda: self.check_app_update(quiet=False))
+        bar.add_cascade(label="Tools", menu=tools)
+        self.configure(menu=bar)
+
+    def _startup_checks(self):
+        missing = [name for name, var in (("MakeMKV", self.exe_var), ("MKVToolNix", self.mkvmerge_var))
+                   if not var.get() or not os.path.isfile(var.get())]
+        if missing and not self.busy and messagebox.askyesno(
+                "MKV Ripper",
+                "Not found on this PC: " + " and ".join(missing) + ".\n\n"
+                "Install now with Windows Package Manager (winget)? Windows may ask for permission. "
+                "MakeMKV has its own license and beta key; installing it means you accept its terms."
+                + ("\n\n(MKVToolNix is only needed for splitting titles into episodes.)"
+                   if missing == ["MKVToolNix"] else "")):
+            self._run_winget(missing, then_check_update=True)
+        elif is_frozen():
+            self.check_app_update(quiet=True)
+
+    def _redetect(self):
+        if not os.path.isfile(self.exe_var.get()):
+            self.exe_var.set(find_makemkvcon())
+        if not os.path.isfile(self.mkvmerge_var.get()):
+            self.mkvmerge_var.set(find_mkvmerge())
+
+    def dep_action(self, package):
+        installed = os.path.isfile((self.exe_var if package == "MakeMKV" else self.mkvmerge_var).get())
+        what = "check for updates to" if installed else "install"
+        if messagebox.askyesno("MKV Ripper", f"Use winget to {what} {package}? "
+                                             "Windows may ask for permission."):
+            self._run_winget([package], upgrade=installed)
+
+    def _run_winget(self, packages, upgrade=False, then_check_update=False):
+        if self.busy:
+            return
+        self._set_busy(True)
+
+        def work():
+            msgs = []
+            try:
+                for pkg in packages:
+                    action = "upgrade" if upgrade else "install"
+                    self.post("status", f"winget: {action} {pkg}... (this can take a few minutes)")
+                    self.post("log", f"--- winget {action} {WINGET_IDS[pkg]}")
+                    code, tail = winget_run(action, pkg, lambda l: self.post("log", l))
+                    last = tail[-1] if tail else ""
+                    msgs.append(f"{pkg}: {last or ('done' if code == 0 else f'exit code {code}')}")
+                self.after(0, self._redetect)
+                self.post("status", "Ready.")
+                self.post("info", "\n".join(msgs))
+                if then_check_update and is_frozen():
+                    self.after(0, lambda: self.check_app_update(quiet=True))
+                self.after(500, self.refresh_drives)
+            except Exception as e:
+                self.post("error", str(e))
+                self.post("status", "Ready.")
+            finally:
+                self.post("done")
+        threading.Thread(target=work, daemon=True).start()
+
+    def check_app_update(self, quiet=True):
+        def work():
+            try:
+                tag, url = latest_release()
+            except Exception as e:
+                if not quiet:
+                    self.post("error", f"Couldn't check GitHub for updates:\n{e}")
+                return
+            if parse_version(tag) <= parse_version(APP_VERSION) or not url:
+                if not quiet:
+                    self.post("info", f"You have the latest version ({APP_VERSION}).")
+                return
+            self.after(0, lambda: self._offer_update(tag, url))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _offer_update(self, tag, url):
+        if not is_frozen():
+            messagebox.showinfo("MKV Ripper", f"Version {tag} is available on GitHub "
+                                              f"(you're running the .py script {APP_VERSION}). "
+                                              "Pull the repo or download MKVRipper.exe from Releases.")
+            return
+        if self.busy or not messagebox.askyesno(
+                "MKV Ripper", f"MKV Ripper {tag} is available (you have {APP_VERSION}). Update now? "
+                              "The app will restart."):
+            return
+        self._set_busy(True)
+        self.status_var.set(f"Downloading MKV Ripper {tag}...")
+
+        def work():
+            try:
+                install_update(url)
+                self.after(0, self.destroy)
+            except Exception as e:
+                self.post("error", f"Update failed:\n{e}")
+                self.post("status", "Ready.")
+                self.post("done")
+        threading.Thread(target=work, daemon=True).start()
 
     # ---- layout ----
     def _build(self):
