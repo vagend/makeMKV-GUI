@@ -1,11 +1,14 @@
 name: Build MKVRipper.exe
 
-# Push a tag like v1.0.1 to build the exe and publish it as a GitHub Release.
-# The app's "Check for update" downloads MKVRipper.exe from the latest release,
-# so bump APP_VERSION in mkv_ripper.py to match the tag before tagging.
+# Publish a GitHub Release with a tag like v1.0.1 (on github.com or by pushing the tag)
+# and this builds MKVRipper.exe and attaches it to that release.
+# The app's update check downloads MKVRipper.exe from the latest release,
+# so bump APP_VERSION in mkv_ripper.py to match the tag first.
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
   workflow_dispatch:
 
 permissions:
@@ -46,4 +49,11 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/MKVRipper.exe --title "MKV Ripper ${{ github.ref_name }}" --generate-notes
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/MKVRipper.exe --clobber
+          } else {
+            gh release create $tag dist/MKVRipper.exe --title "MKV Ripper $tag" --generate-notes
+          }

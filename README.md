@@ -26,7 +26,7 @@ With Python 3 installed: `python mkv_ripper.py`
 
 ### Releasing a new version
 
-Bump `APP_VERSION` in `mkv_ripper.py`, commit, then push a matching tag (e.g. `git tag v1.0.1 && git push origin v1.0.1`). GitHub Actions builds `MKVRipper.exe` and publishes the release.
+Bump `APP_VERSION` in `mkv_ripper.py` and commit. Then on GitHub go to **Releases > Draft a new release**, create a tag matching the version (e.g. `v1.0.1`), and publish. GitHub Actions builds `MKVRipper.exe` and attaches it to the release within a couple of minutes. (Pushing a `v*` tag from git works too.)
 
 ## Usage
 
