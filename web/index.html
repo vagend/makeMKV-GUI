@@ -196,6 +196,15 @@ footer { flex: none; display: flex; align-items: center; gap: 16px; padding: 12p
 .toast.error { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
 .toast .ti { color: var(--ok); } .toast.error .ti { color: var(--danger); }
 .toast .x { margin-left: auto; cursor: pointer; color: var(--faint); background: none; border: 0; padding: 0; }
+table.lens { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.lens td { padding: 5px 8px; border-top: 1px solid var(--border); }
+table.lens tr:first-child td { border-top: 0; }
+table.lens td.r { text-align: right; font-weight: 600; }
+table.lens tr.off td { color: var(--warn); }
+.warnTxt { color: var(--warn) !important; }
+.lenline { font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
+.chaps { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 4px 12px; font-size: 12px; margin-top: 6px; }
+.chaps span { color: var(--muted); } .chaps b { color: var(--text); font-weight: 500; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -315,6 +324,47 @@ function guessPts(chapters, n) {
   if (n < 2 || chapters < n || chapters % n) return null;
   const step = chapters / n; return Array.from({length: n - 1}, (_, k) => 1 + step * (k + 1));
 }
+/* episode lengths from chapter start times (seconds) and cut chapters (1-based) */
+function autoPts(times, total, n) {
+  if (!times || n < 2 || times.length < n || total <= 0) return null;
+  const pts = []; let prev = 1;
+  for (let k = 1; k < n; k++) {
+    const target = total * k / n; let best = null;
+    for (let c = prev + 1; c <= times.length - (n - 1 - k); c++)
+      if (best === null || Math.abs(times[c - 1] - target) < Math.abs(times[best - 1] - target)) best = c;
+    if (best === null) return null;
+    pts.push(best); prev = best;
+  }
+  return pts;
+}
+function epLengths(times, total, pts) {
+  const starts = [0, ...pts.map(p => times[p - 1])], ends = [...pts.map(p => times[p - 1]), total];
+  return starts.map((a, i) => ({ from: i ? pts[i - 1] : 1, to: i < pts.length ? pts[i] - 1 : times.length, secs: ends[i] - a }));
+}
+function fmtLen(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+}
+/* table of episode lengths; flags any episode far from the average so a bad cut stands out */
+function lengthsTable(times, total, pts, names) {
+  const L = epLengths(times, total, pts), avg = total / L.length;
+  const rows = L.map((e, i) => {
+    const off = Math.abs(e.secs - avg) / avg > 0.15;
+    return `<tr class="${off ? "off" : ""}"><td>Episode ${i + 1}</td><td class="mono">${names && names[i] ? esc(names[i]) : ""}</td>
+      <td>ch. ${e.from}–${e.to}</td><td class="mono r">${fmtLen(e.secs)}${off ? " " + icon("alert", "width:13px;height:13px;vertical-align:-2px") : ""}</td></tr>`;
+  }).join("");
+  const anyOff = L.some(e => Math.abs(e.secs - avg) / avg > 0.15);
+  return `<table class="lens">${rows}</table>` + (anyOff
+    ? `<div class="hint warnTxt">Marked lengths are far from the average. Check the cuts, or pick the chapters yourself.</div>`
+    : `<div class="hint">Total ${fmtLen(total)}. Episodes on the same disc are usually within a minute or two of each other.</div>`);
+}
+function splitLens(t, h) {   // short "47:21 · 48:02 · 46:44" for the title row, or "" if unknown
+  if (!t.chapter_times || !h || h.how !== "split") return "";
+  const pts = h.auto ? autoPts(t.chapter_times, t.chapter_total, h.eps) : h.pts;
+  return pts ? epLengths(t.chapter_times, t.chapter_total, pts).map(e => fmtLen(e.secs)).join(" · ") : "";
+}
+
 function parsePts(text, chapters) {
   const parts = text.split(/[\s,]+/).filter(Boolean);
   if (!parts.length) throw new Error("Enter the chapters where episodes 2, 3, … start, or click Fill in.");
@@ -373,7 +423,9 @@ function renderTitles() {
     let pill;
     if (S.mode === "movie") pill = `<span class="pill none">—</span>`;
     else if (pa) pill = `<span class="pill mute" title="This title is the other titles joined together">Play all · skip</span>`;
-    else if (h && h.how === "split") pill = `<button class="pill accent" data-eps="${t.id}">${icon("scissors")}${epCount(t.id)} episodes · split</button>`;
+    else if (h && h.how === "split") { const ls = splitLens(t, h);
+      pill = `<button class="pill accent" data-eps="${t.id}" title="${ls ? "Episode lengths: " + ls : "Lengths are shown after ripping, before splitting"}">${icon("scissors")}${epCount(t.id)} episodes · split</button>` +
+        (ls ? `<div class="lenline mono">${ls}</div>` : ""); }
     else if (h && h.how === "whole") pill = `<button class="pill accent" data-eps="${t.id}">${icon("file")}${h.eps} episodes · one file</button>`;
     else if (multi) pill = `<button class="pill warn" data-eps="${t.id}">${icon("alert")}Several episodes?</button>`;
     else pill = `<button class="pill" data-eps="${t.id}" title="Split this title into episodes">1 episode</button>`;
@@ -473,14 +525,14 @@ function toast(kind, text) {
   $("#toasts").appendChild(el);
   if (kind !== "error") setTimeout(() => el.remove(), 7000);
 }
-function dialog(html, onMount) {
+function dialog(html, onMount, modal = false) {
   const scrim = document.createElement("div");
   scrim.className = "scrim";
   scrim.innerHTML = `<div class="dlg">${html}</div>`;
   const close = () => { scrim.remove(); document.removeEventListener("keydown", key); };
-  const key = e => { if (e.key === "Escape") close(); };
+  const key = e => { if (e.key === "Escape" && !modal) close(); };
   document.addEventListener("keydown", key);
-  scrim.addEventListener("mousedown", e => { if (e.target === scrim) close(); });
+  scrim.addEventListener("mousedown", e => { if (e.target === scrim && !modal) close(); });
   $("#dialogs").appendChild(scrim);
   onMount && onMount(scrim.querySelector(".dlg"), close);
   return close;
@@ -509,10 +561,11 @@ function openEpisodes(id) {
           <div class="row" style="gap:16px">
             <label class="switch"><input type="radio" name="pick" id="eAuto"> Find the cuts automatically</label>
             <label class="switch"><input type="radio" name="pick" id="eMan"> I'll enter the chapters</label></div>
-          <div class="hint" id="eAutoTxt" style="margin-top:6px">After ripping, MKV Ripper reads the chapter times and cuts at the chapters closest to equal-length episodes.</div>
+          <div class="hint" id="eAutoTxt" style="margin-top:6px">Cuts at the chapters that give the most even episode lengths.</div>
           <div class="row" id="eManRow" style="margin-top:8px"><span>New episodes start at chapters</span><input class="input mono" id="ePts" style="width:120px" spellcheck="false" placeholder="7,13">
             <button class="btn sm" id="eFill">Fill in</button></div>
           <div class="hint" id="eHint" style="margin-top:6px"></div>
+          <div id="eLens" style="margin-top:10px"></div>
           <div class="hint" style="margin-top:6px">If the split doesn't work out, the title is saved as one file instead, so nothing is lost.</div>
         </div>
       </label>
@@ -530,6 +583,8 @@ function openEpisodes(id) {
     P.value = h && h.how === "split" ? h.pts.join(",") : "";
     const nEps = () => Math.max(2, Math.min(50, parseInt(N.value) || 2));
     const fill = () => {
+      const a = t.chapter_times && autoPts(t.chapter_times, t.chapter_total, nEps());
+      if (a) { P.value = a.join(","); hint.textContent = "Filled in the most even cuts. Change any number and the lengths update."; return; }
       const g = guessPts(t.chapters, nEps());
       if (g) { P.value = g.join(","); hint.textContent = `Filled in ${t.chapters / nEps()} chapters per episode. It's a guess — check one episode change in VLC if you can.`; }
       else hint.textContent = `${t.chapters} chapters don't divide evenly into ${nEps()} episodes, so type the chapters in yourself.`;
@@ -539,11 +594,27 @@ function openEpisodes(id) {
       d.querySelector("#eAuto").checked = !manual; d.querySelector("#eMan").checked = manual;
       d.querySelector("#eManRow").hidden = !manual; d.querySelector("#eAutoTxt").hidden = manual; hint.hidden = !manual;
       const f = firstEp(id); d.querySelector("#eWhole").textContent = multiName(f, f + nEps() - 1);
+      showLens();
+    };
+    const showLens = () => {
+      const box = d.querySelector("#eLens");
+      if (!t.chapter_times) {
+        box.innerHTML = `<div class="hint">MKV Ripper couldn't read the chapter times from the disc, so it will show you the episode lengths after ripping this title and wait for your OK before splitting.</div>`;
+        return;
+      }
+      let pts = null;
+      if (manual) { try { pts = parsePts(P.value, t.chapters); } catch (e) { box.innerHTML = ""; return; } }
+      else pts = autoPts(t.chapter_times, t.chapter_total, nEps());
+      if (!pts) { box.innerHTML = `<div class="hint warnTxt">Can't make ${nEps()} episodes from ${t.chapters} chapters.</div>`; return; }
+      const f = firstEp(id);
+      box.innerHTML = (manual ? "" : `<div class="hint" style="margin-bottom:4px">Cuts at chapters <b class="mono">${pts.join(", ")}</b></div>`) +
+        lengthsTable(t.chapter_times, t.chapter_total, pts, pts.concat(0).map((_, i) => (S.prefix || "") + (f + i)));
     };
     d.querySelectorAll(".opt").forEach(o => o.addEventListener("click", () => { how = o.dataset.how; sync(); }));
     d.querySelectorAll(".stepper button").forEach(b => b.onclick = e => { e.preventDefault(); N.value = nEps() + +b.dataset.d; if (manual) fill(); sync(); });
     N.oninput = () => { sync(); };
-    d.querySelector("#eFill").onclick = e => { e.preventDefault(); fill(); };
+    P.oninput = () => showLens();
+    d.querySelector("#eFill").onclick = e => { e.preventDefault(); fill(); showLens(); };
     d.querySelector("#eAuto").onchange = () => { manual = false; sync(); };
     d.querySelector("#eMan").onchange = () => { manual = true; if (!P.value) fill(); sync(); };
     sync();
@@ -626,6 +697,41 @@ function showResult(res) {
   (d, close) => { d.querySelector("[data-x]").onclick = close; d.querySelector("[data-open]").onclick = () => api.open_folder(res.out); });
 }
 
+/* ---------- check lengths after ripping, before splitting ---------- */
+let reviewOpen = null;
+function openReview(r) {
+  const key = r.label + "|" + r.pts.join(",");
+  if (reviewOpen === key) return;
+  reviewOpen = key;
+  dialog(`
+    <div class="dh"><h3>Check the episodes in title ${esc(r.label)}</h3>
+      <p>Ripped: ${fmtLen(r.total)} · ${r.times.length} chapters. Nothing is split until you say so.</p></div>
+    <div class="content">
+      <div class="row"><span>New episodes start at chapters</span><input class="input mono" id="rPts" style="width:140px" spellcheck="false">
+        <button class="btn sm" id="rAuto">Most even</button></div>
+      <div class="callout err" id="rErr" hidden style="margin:8px 0 0"></div>
+      <div id="rLens" style="margin-top:10px"></div>
+      <details style="margin-top:10px"><summary class="hint">Chapter start times</summary>
+        <div class="chaps mono">${r.times.map((x, i) => `<span>${i + 1}<b>${fmtLen(x)}</b></span>`).join("")}</div></details>
+    </div>
+    <div class="df"><button class="btn ghost" data-whole>Keep as one file</button><div class="spacer"></div>
+      <button class="btn primary" data-ok>Split here</button></div>`,
+  (d, close) => {
+    const P = d.querySelector("#rPts"), err = d.querySelector("#rErr"), box = d.querySelector("#rLens");
+    P.value = (r.pts.length ? r.pts : autoPts(r.times, r.total, r.episodes) || []).join(",");
+    const show = () => {
+      err.hidden = true;
+      try { const pts = parsePts(P.value, r.times.length); box.innerHTML = lengthsTable(r.times, r.total, pts, r.names); return pts; }
+      catch (e) { box.innerHTML = ""; err.textContent = e.message; err.hidden = false; return null; }
+    };
+    P.oninput = show;
+    d.querySelector("#rAuto").onclick = () => { P.value = (autoPts(r.times, r.total, r.episodes) || []).join(","); show(); };
+    d.querySelector("[data-ok]").onclick = async () => { const pts = show(); if (!pts) return; close(); await api.review_answer({ pts }); };
+    d.querySelector("[data-whole]").onclick = async () => { close(); await api.review_answer({ whole: true }); };
+    show();
+  }, true);
+}
+
 /* ---------- polling ---------- */
 async function poll() {
   let st;
@@ -648,6 +754,7 @@ async function poll() {
     refreshNames();
   }
   if (wasBusy && !st.busy && prevTask === "rip" && st.result && st.result !== lastResult) { lastResult = st.result; showResult(st.result); }
+  if (st.review) openReview(st.review); else reviewOpen = null;
   renderHeader(); renderDisc(); renderFooter();
   if (wasBusy !== st.busy) renderTitles();
 }

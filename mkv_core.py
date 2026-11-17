@@ -295,14 +295,103 @@ def run_robot(args, on_line=None):
 
 
 def list_drives(exe):
-    """Return [(index, drive_name, disc_name)] for drives that exist."""
+    """Return [(index, drive_name, disc_name, device path)] for drives that exist."""
     _, lines = run_robot([exe, "-r", "--cache=1", "info", "disc:9999"])
     drives = []
     for kind, f in lines:
-        # DRV:index,visible,enabled,flags,drive name,disc name
+        # DRV:index,visible,enabled,flags,drive name,disc name[,device path e.g. D: or /dev/sr0]
         if kind == "DRV" and len(f) >= 6 and f[4].strip():
-            drives.append((int(f[0]), f[4], f[5]))
+            drives.append((int(f[0]), f[4], f[5], f[6] if len(f) > 6 else ""))
     return drives
+
+
+# ---- DVD chapter times, read from the disc's IFO files (not encrypted) ----
+
+def _be16(b, o):
+    return int.from_bytes(b[o:o + 2], "big")
+
+
+def _be32(b, o):
+    return int.from_bytes(b[o:o + 4], "big")
+
+
+def _bcd(x):
+    return (x >> 4) * 10 + (x & 0x0F)
+
+
+def _dvd_time(b):
+    """DVD playback time: 4 BCD bytes hh mm ss ff, top two bits of ff give the frame rate."""
+    fps = {1: 25.0, 3: 30000 / 1001}.get(b[3] >> 6, 30.0)
+    return _bcd(b[0]) * 3600 + _bcd(b[1]) * 60 + _bcd(b[2]) + _bcd(b[3] & 0x3F) / fps
+
+
+def dvd_root(device=""):
+    """Folder holding VIDEO_TS for the drive MakeMKV reported (e.g. 'D:'), or the only DVD found."""
+    cands = []
+    if device and not device.startswith("/dev/"):
+        cands.append(device if device.endswith(("\\", "/")) else device + os.sep)
+    if cands and os.path.isfile(os.path.join(cands[0], "VIDEO_TS", "VIDEO_TS.IFO")):
+        return cands[0]
+    if sys.platform == "win32":
+        found = [f"{c}:\\" for c in "DEFGHIJKLMNOPQRSTUVWXYZ"
+                 if os.path.isfile(f"{c}:\\VIDEO_TS\\VIDEO_TS.IFO")]
+        if len(found) == 1:
+            return found[0]
+    return ""
+
+
+def dvd_chapter_times(root, title_no):
+    """(chapter start times in seconds, total seconds) for DVD title `title_no` (1-based, the
+    number VLC shows), read from VIDEO_TS.IFO and the title set's IFO. None if it can't be read."""
+    try:
+        vts_dir = os.path.join(root, "VIDEO_TS")
+        with open(os.path.join(vts_dir, "VIDEO_TS.IFO"), "rb") as f:
+            vmg = f.read()
+        tt = _be32(vmg, 0xC4) * 2048                    # title search pointer table
+        if not 1 <= title_no <= _be16(vmg, tt):
+            return None
+        e = tt + 8 + (title_no - 1) * 12
+        n_ptt, vtsn, ttn = _be16(vmg, e + 2), vmg[e + 6], vmg[e + 7]
+        with open(os.path.join(vts_dir, f"VTS_{vtsn:02d}_0.IFO"), "rb") as f:
+            v = f.read()
+        ptt = _be32(v, 0xC8) * 2048                     # part-of-title (chapter) table
+        pgcit = _be32(v, 0xCC) * 2048                   # program chain table
+        if not 1 <= ttn <= _be16(v, ptt):
+            return None
+        # count chapters from the title list: some discs leave the table's end address empty
+        start = ptt + _be32(v, ptt + 8 + 4 * (ttn - 1))
+        chapters = [(_be16(v, p), _be16(v, p + 2)) for p in range(start, start + 4 * n_ptt, 4)]
+        if not chapters:
+            return None
+
+        def pgc_at(n):
+            return pgcit + _be32(v, pgcit + 8 + (n - 1) * 8 + 4)
+
+        def cell_time(pgc, cell):                       # cell is 1-based; skips extra angle cells
+            c = pgc + _be16(v, pgc + 0xE8) + (cell - 1) * 24
+            block_mode, block_type = v[c] >> 6, (v[c] >> 4) & 0x03
+            if block_type == 1 and block_mode not in (0, 1):
+                return 0.0
+            return _dvd_time(v[c + 4:c + 8])
+
+        durations = []
+        for i, (pgcn, pgn) in enumerate(chapters):
+            pgc = pgc_at(pgcn)
+            n_prog, n_cells = v[pgc + 2], v[pgc + 3]
+            if not 1 <= pgn <= n_prog:
+                return None
+            pmap = pgc + _be16(v, pgc + 0xE6)
+            first = v[pmap + pgn - 1]
+            nxt = chapters[i + 1] if i + 1 < len(chapters) else None
+            stop = v[pmap + nxt[1] - 1] if nxt and nxt[0] == pgcn else n_cells + 1
+            durations.append(sum(cell_time(pgc, c) for c in range(first, stop)))
+        starts, t = [], 0.0
+        for d in durations:
+            starts.append(round(t, 2))
+            t += d
+        return starts, round(t, 2)
+    except (OSError, IndexError, ValueError, ZeroDivisionError):
+        return None
 
 
 def scan_titles(exe, disc_index, minlength, on_line=None):
@@ -387,7 +476,8 @@ def check_prefix(prefix):
 
 
 def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
-              mkvmerge=None, split_points=None, on_split_progress=None, fallback_path=None):
+              mkvmerge=None, split_points=None, on_split_progress=None, fallback_path=None,
+              on_review=None):
     """Rip one title into a temp folder, optionally split it at chapters, then move the
     result(s) to final_paths (one path, or one per episode when splitting).
     If splitting fails and fallback_path is given, the whole rip is saved there instead
@@ -412,15 +502,23 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
         try:
             if not mkvmerge or not os.path.isfile(mkvmerge):
                 raise RuntimeError("MKVToolNix (mkvmerge) isn't installed")
-            if isinstance(split_points, dict):          # {"auto": episodes, "total": seconds}
+            if isinstance(split_points, dict):
+                # {"episodes": n, "pts": [..] or None (= automatic), "total": seconds, "review": bool}
                 extract = find_mkvextract(mkvmerge)
                 if not extract:
                     raise RuntimeError("mkvextract (part of MKVToolNix) wasn't found")
                 times = chapter_times(extract, ripped)
-                total = media_duration(mkvmerge, ripped) or split_points["total"] or (times[-1] if times else 0)
-                pts = auto_split_points(times, total, split_points["auto"])
+                total = media_duration(mkvmerge, ripped) or split_points.get("total") or (times[-1] if times else 0)
+                n = split_points["episodes"]
+                pts = split_points.get("pts") or auto_split_points(times, total, n)
+                if split_points.get("review") and on_review:
+                    answer = on_review(times, total, pts, n)    # waits for the person to check the lengths
+                    if answer == "whole":
+                        os.replace(ripped, fallback_path)
+                        return "whole"
+                    pts = answer
                 if not pts:
-                    raise RuntimeError(f"couldn't find {split_points['auto']} episodes in {len(times)} chapters")
+                    raise RuntimeError(f"couldn't find {n} episodes in {len(times)} chapters")
                 if on_line:
                     fmt = lambda t: f"{int(t // 3600)}:{int(t % 3600 // 60):02d}:{int(t % 60):02d}"
                     on_line("MSG", ["", "", "", "Splitting before chapters " + ", ".join(

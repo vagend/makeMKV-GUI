@@ -3,7 +3,7 @@
 A small Windows front end for MakeMKV that rips the titles you pick and names them for Plex.
 
 - **TV mode:** give a prefix (e.g. `S1E` or `Belgravia (2020) - S01E`) and a first episode number. Checked titles are saved as `S1E1.mkv`, `S1E2.mkv`, …
-- **Split titles:** if a disc stores several episodes as one big title, enter the chapters where each new episode starts (e.g. `6,11`). After ripping, MKVToolNix splits it losslessly and each piece gets the next episode number.
+- **Split titles:** if a disc stores several episodes as one big title, say how many episodes it holds. MKV Ripper picks the chapters that give the most even episodes, or you type them yourself (e.g. `7,13`). Either way it shows each episode's length before anything is split, and flags an episode that's much longer or shorter than the rest. On a DVD the chapter times come from the disc's own files when you scan, so you see the lengths before ripping. If they can't be read, the rip pauses after copying the title so you can check the lengths (and change the chapters) before it splits. MKVToolNix then splits losslessly and each piece gets the next episode number.
 - **Movie mode:** give the movie name and year (e.g. `The Matrix (1999)`). The first checked title is saved as `The Matrix (1999)\The Matrix (1999).mkv`; any other checked titles are saved beside it as Plex extras (`Extra 1-other.mkv`, …).
 
 ## Download and run

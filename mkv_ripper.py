@@ -49,7 +49,10 @@ class Api:
             "notices": [],
             "result": None,
             "update": None,           # {"build": n} when a newer build is on GitHub
+            "review": None,           # a split waiting for the person to check episode lengths
         }
+        self._review_event = threading.Event()
+        self._review_answer = None
 
     # ---- plumbing ----
     def _set(self, **kw):
@@ -137,7 +140,7 @@ class Api:
         def work():
             self._set(status="Looking for drives...")
             drives = core.list_drives(exe)
-            self._set(drives=[{"index": i, "name": n, "disc": d} for i, n, d in drives],
+            self._set(drives=[{"index": i, "name": n, "disc": d, "path": p} for i, n, d, p in drives],
                       status="Ready" if drives else "No disc drives found")
         return self._run("drives", work)
 
@@ -160,6 +163,17 @@ class Api:
                 except ValueError:
                     t["chapters"] = 0
             play_all = {str(k): v for k, v in core.find_play_all(titles).items()}
+            drive = next((d for d in self._s["drives"] if d["index"] == disc), {})
+            root = core.dvd_root(drive.get("path", ""))
+            got = 0
+            for t in titles:
+                if root and t.get("dvd"):
+                    ct = core.dvd_chapter_times(root, t["dvd"])
+                    if ct and len(ct[0]) == t["chapters"]:
+                        t["chapter_times"], t["chapter_total"] = ct
+                        got += 1
+            self._logline(f"Chapter times read from the disc for {got} title(s)" if got
+                          else "Chapter times will be read after ripping (couldn't read them from the disc)")
             with self._lock:
                 self._s.update(titles=titles, play_all=play_all, scanned={"disc": disc, "minlen": minlen},
                                scan_id=self._s["scan_id"] + 1,
@@ -197,18 +211,21 @@ class Api:
         plan = []
         for r in rows:
             how, eps, pts = r.get("how", "single"), int(r.get("eps") or 1), list(r.get("pts") or [])
-            if how == "split" and r.get("auto") and eps > 1:
-                t = next((x for x in self._s["titles"] if x["id"] == r["id"]), {})
-                plan.append((r["id"], core.build_names(prefix, ep, eps), {"auto": eps, "total": t.get("secs", 0)},
-                             core.build_multi_name(prefix, ep, ep + eps - 1)))
-                ep += eps
+            t = next((x for x in self._s["titles"] if x["id"] == r["id"]), {})
+            if how == "split" and (pts or (r.get("auto") and eps > 1)):
+                n = len(pts) + 1 if pts else eps
+                known = t.get("chapter_times")
+                if known and not pts:                # same automatic cuts the episodes dialog showed
+                    pts = core.auto_split_points(known, t.get("chapter_total") or t.get("secs", 0), n) or []
+                if pts and known:
+                    spec = pts                       # lengths were shown before ripping
+                else:                                # check the lengths after ripping, before splitting
+                    spec = {"episodes": n, "pts": pts or None, "total": t.get("secs", 0), "review": True}
+                plan.append((r["id"], core.build_names(prefix, ep, n), spec, core.build_multi_name(prefix, ep, ep + n - 1)))
+                ep += n
             elif how == "whole" and eps > 1:
                 plan.append((r["id"], [core.build_multi_name(prefix, ep, ep + eps - 1)], [], None))
                 ep += eps
-            elif how == "split" and pts:
-                n = len(pts) + 1
-                plan.append((r["id"], core.build_names(prefix, ep, n), pts, core.build_multi_name(prefix, ep, ep + n - 1)))
-                ep += n
             else:
                 plan.append((r["id"], core.build_names(prefix, ep, 1), [], None))
                 ep += 1
@@ -254,14 +271,19 @@ class Api:
                 self._set(status=f"Ripping title {lab} ({n} of {len(plan)})", progress=0)
                 self._logline(f"--- Title {lab} -> {names}")
                 if isinstance(pts, dict):
-                    self._logline(f"Will split into {pts['auto']} episodes at the chapters closest to equal lengths")
+                    self._logline(f"Will split into {pts['episodes']} episodes; you'll check the lengths before it splits")
                 elif pts:
                     self._logline(f"Will split before chapters {','.join(map(str, pts))}")
                 result = core.rip_title(exe, disc, minlen, tid, paths, self._robot, mkvmerge=mkvmerge,
                                         split_points=pts, fallback_path=fallback,
+                                        on_review=lambda times, total, p, n, lab=lab, names=paths: self._ask_review(
+                                            lab, times, total, p, n, [os.path.basename(x) for x in names]),
                                         on_split_progress=lambda pct: self._set(progress=pct / 100,
                                                                                 status=f"Splitting title {lab}..."))
-                if result.startswith("fallback"):
+                if result == "whole":
+                    self._logline(f"Title {lab} kept as one file: {os.path.basename(fallback)}")
+                    done += 1
+                elif result.startswith("fallback"):
                     msg = (f"Title {lab} couldn't be split ({result.split(': ', 1)[1]}), so it was saved as one "
                            f"file: {os.path.basename(fallback)}")
                     self._logline(msg)
@@ -274,6 +296,29 @@ class Api:
         if not self._run("rip", work):
             return {"error": "Something else is still running."}
         return {"ok": True}
+
+    def _ask_review(self, label, times, total, pts, episodes, names):
+        """Pause the rip until the person checks the episode lengths (answered by review_answer)."""
+        self._review_event.clear()
+        self._review_answer = None
+        self._set(review={"label": label, "times": times, "total": total, "pts": pts or [],
+                          "episodes": episodes, "names": names},
+                  status=f"Check the episode lengths for title {label}", progress=None)
+        self._review_event.wait()
+        ans = self._review_answer
+        self._set(review=None, status=f"Splitting title {label}...")
+        if ans == "whole":
+            return "whole"
+        return ans
+
+    def review_answer(self, answer):
+        """From the page: {"pts": [7, 13]} to split there, or {"whole": true} to keep one file."""
+        if answer.get("whole"):
+            self._review_answer = "whole"
+        else:
+            self._review_answer = [int(x) for x in answer.get("pts", [])]
+        self._review_event.set()
+        return True
 
     def choose_folder(self, start=""):
         return self._dialog("folder", start)
