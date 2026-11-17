@@ -46,6 +46,8 @@ Name: "desktopicon"; Description: "Put a shortcut on the desktop"; Flags: unchec
 Filename: "{app}\MKVRipper.exe"; Description: "Open MKV Ripper"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
+; the app's saved settings (output folder, prefix, theme)
+Type: filesandordirs; Name: "{userappdata}\MKVRipper"
 ; the previous exe kept after a self-update, then the folder if nothing else is in it
 Type: files; Name: "{app}\MKVRipper.exe.old"
 Type: files; Name: "{app}\MKVRipper.exe.new"

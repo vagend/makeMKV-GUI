@@ -38,6 +38,15 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+try:
+    import sv_ttk              # Windows 11 look
+except ImportError:
+    sv_ttk = None
+try:
+    import darkdetect          # follow Windows light/dark setting
+except ImportError:
+    darkdetect = None
+
 DEFAULT_MAKEMKVCON = [
     r"C:\Program Files (x86)\MakeMKV\makemkvcon64.exe",
     r"C:\Program Files (x86)\MakeMKV\makemkvcon.exe",
@@ -360,23 +369,79 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
 
 CHECK_ON, CHECK_OFF = "\u2611", "\u2610"
 
+SETTINGS_FILE = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "MKVRipper", "settings.json")
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(data):
+    try:
+        os.makedirs(os.path.dirname(SETTINGS_FILE), exist_ok=True)
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except OSError:
+        pass
+
+
+def system_theme():
+    try:
+        return "dark" if darkdetect and darkdetect.isDark() else "light"
+    except Exception:
+        return "light"
+
+
+def set_dark_titlebar(win, dark):
+    """Match the Windows title bar to the theme (Windows 10 20H1+ / 11); harmless elsewhere."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        value = ctypes.c_int(1 if dark else 0)
+        for attr in (20, 19):   # DWMWA_USE_IMMERSIVE_DARK_MODE (new id, then pre-20H1 id)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)) == 0:
+                break
+    except Exception:
+        pass
+
+
+def duration_seconds(text):
+    try:
+        parts = [int(p) for p in text.split(":")]
+    except ValueError:
+        return 0
+    secs = 0
+    for p in parts:
+        secs = secs * 60 + p
+    return secs
+
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.geometry("940x640")
-        self.minsize(760, 500)
+        self.settings = load_settings()
+        self.geometry(self.settings.get("geometry", "1040x760"))
+        self.minsize(860, 620)
 
         self.exe_var = tk.StringVar(value=find_makemkvcon())
         self.mkvmerge_var = tk.StringVar(value=find_mkvmerge())
         self.drive_var = tk.StringVar()
-        self.minlen_var = tk.StringVar(value="120")
-        self.mode_var = tk.StringVar(value="tv")
-        self.prefix_var = tk.StringVar(value="S1E")
+        self.minlen_var = tk.StringVar(value=str(self.settings.get("minlen", 120)))
+        self.mode_var = tk.StringVar(value=self.settings.get("mode", "tv"))
+        self.prefix_var = tk.StringVar(value=self.settings.get("prefix", "S1E"))
         self.movie_var = tk.StringVar(value="")
         self.start_var = tk.StringVar(value="1")
-        self.out_var = tk.StringVar()
+        self.out_var = tk.StringVar(value=self.settings.get("out", ""))
+        self.theme_var = tk.StringVar(value=os.environ.get("MKVRIPPER_THEME") or self.settings.get("theme", "System"))
         self.status_var = tk.StringVar(value="Ready.")
+        self.showlog_var = tk.BooleanVar(value=False)
 
         self.drives = []          # [(index, drive_name, disc_name)]
         self.titles = []          # title dicts
@@ -389,26 +454,133 @@ class App(tk.Tk):
 
         cleanup_old_exe()
         self.title(f"MKV Ripper (build {APP_BUILD})" if APP_BUILD else "MKV Ripper (from source)")
-        self._build_menu()
+        self.apply_theme()
         self._build()
         for v in (self.prefix_var, self.start_var, self.movie_var, self.mode_var):
             v.trace_add("write", lambda *_: self._refresh_names())
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._pump)
+        if os.environ.get("MKVRIPPER_SCREENSHOT"):
+            self.after(1500, self._selftest)
+            return
         if self.exe_var.get():
             self.refresh_drives()
         self.after(800, self._startup_checks)
 
-    # ---- dependencies & updates ----
-    def _build_menu(self):
-        bar = tk.Menu(self)
-        tools = tk.Menu(bar, tearoff=False)
-        tools.add_command(label="Install / update MakeMKV", command=lambda: self.dep_action("MakeMKV"))
-        tools.add_command(label="Install / update MKVToolNix", command=lambda: self.dep_action("MKVToolNix"))
-        tools.add_separator()
-        tools.add_command(label="Check for MKV Ripper update", command=lambda: self.check_app_update(quiet=False))
-        bar.add_cascade(label="Tools", menu=tools)
-        self.configure(menu=bar)
+    def _selftest(self):
+        """CI only: fill in sample titles, screenshot the main window and the split dialog, then quit."""
+        from PIL import ImageGrab
+        out = os.environ["MKVRIPPER_SCREENSHOT"]
+        self.drives = [(0, "HL-DT-ST BD-RE WH16NS40", "BELGRAVIA_D1")]
+        self._set_drives(self.drives)
+        self._set_titles([
+            {"id": 0, "duration": "2:15:01", "chapters": "15", "size": "4.1 GB"},
+            {"id": 1, "duration": "0:12:04", "chapters": "3", "size": "310.2 MB"},
+            {"id": 2, "duration": "0:02:31", "chapters": "1", "size": "64.0 MB"},
+        ])
+        self.checked = {0}
+        self.prefix_var.set("Belgravia (2020) - S01E0")
+        self.out_var.set(r"D:\Plex\TV Shows\Belgravia (2020)\Season 01")
+        self.status_var.set("Found 3 title(s). Check the ones to rip.")
+        self._refresh_names()
 
+        def grab(name, win):
+            win.update()
+            x, y = win.winfo_rootx(), win.winfo_rooty()
+            ImageGrab.grab((x - 8, y - 32, x + win.winfo_width() + 8, y + win.winfo_height() + 8)).save(out + name)
+
+        def step2():
+            grab("-main.png", self)
+            self.edit_split()
+            self.after(1200, step3)
+
+        def step3():
+            dlg = [w for w in self.winfo_children() if isinstance(w, tk.Toplevel)][-1]
+            grab("-split.png", dlg)
+            self.destroy()
+        self.after(1200, step2)
+
+    # ---- look & feel ----
+    def apply_theme(self):
+        choice = self.theme_var.get()
+        mode = system_theme() if choice == "System" else choice.lower()
+        self.dark = mode == "dark"
+        if sv_ttk:
+            sv_ttk.set_theme(mode)
+        st = ttk.Style(self)
+        base = ("Segoe UI", 10)
+        muted = "#a0a0a0" if self.dark else "#606060"
+        self.accent = "#4cc2ff" if self.dark else "#005fb8"
+        self.warn = "#fce100" if self.dark else "#9d5d00"
+        st.configure("Title.TLabel", font=("Segoe UI Semibold", 20))
+        st.configure("Section.TLabel", font=("Segoe UI Semibold", 12))
+        st.configure("Muted.TLabel", foreground=muted, font=("Segoe UI", 9))
+        st.configure("Hint.TLabel", foreground=self.warn, font=("Segoe UI", 10))
+        st.configure("Treeview", rowheight=32, font=base)
+        st.configure("Treeview.Heading", font=("Segoe UI Semibold", 10))
+        if hasattr(self, "tree"):
+            self.tree.tag_configure("hint", foreground=self.warn)
+            self._style_log()
+        set_dark_titlebar(self, self.dark)
+
+    def _style_log(self):
+        bg = "#1c1c1c" if self.dark else "#fafafa"
+        fg = "#d0d0d0" if self.dark else "#202020"
+        self.log.configure(bg=bg, fg=fg, insertbackground=fg, relief="flat",
+                           highlightthickness=0, font=("Cascadia Mono", 9))
+
+    def on_close(self):
+        self.settings.update(geometry=self.geometry(), minlen=self.minlen_var.get().strip() or "120",
+                             mode=self.mode_var.get(), prefix=self.prefix_var.get(),
+                             out=self.out_var.get(), theme=self.theme_var.get())
+        save_settings(self.settings)
+        self.destroy()
+
+    def open_settings(self):
+        win = tk.Toplevel(self)
+        win.title("Settings")
+        win.transient(self)
+        win.resizable(False, False)
+        set_dark_titlebar(win, self.dark)
+        frm = ttk.Frame(win, padding=20)
+        frm.pack(fill="both", expand=True)
+        frm.columnconfigure(1, weight=1)
+
+        def tool_row(r, label, var, browse, pkg, note):
+            ttk.Label(frm, text=label, style="Section.TLabel").grid(row=r, column=0, columnspan=4, sticky="w", pady=(0 if r == 0 else 14, 2))
+            ttk.Entry(frm, textvariable=var, width=60).grid(row=r + 1, column=0, columnspan=2, sticky="ew")
+            ttk.Button(frm, text="Browse...", command=browse).grid(row=r + 1, column=2, padx=(8, 0))
+            ttk.Button(frm, text="Install / update", command=lambda: self.dep_action(pkg)).grid(row=r + 1, column=3, padx=(8, 0))
+            ttk.Label(frm, text=note, style="Muted.TLabel").grid(row=r + 2, column=0, columnspan=4, sticky="w")
+
+        tool_row(0, "MakeMKV", self.exe_var, self.browse_exe, "MakeMKV", "Reads the disc. Found automatically when installed normally.")
+        tool_row(3, "MKVToolNix", self.mkvmerge_var, self.browse_mkvmerge, "MKVToolNix", "Only needed to split a title into episodes.")
+
+        ttk.Label(frm, text="Scanning", style="Section.TLabel").grid(row=6, column=0, columnspan=4, sticky="w", pady=(14, 2))
+        row = ttk.Frame(frm)
+        row.grid(row=7, column=0, columnspan=4, sticky="w")
+        ttk.Label(row, text="Hide titles shorter than").pack(side="left")
+        ttk.Spinbox(row, from_=0, to=3600, increment=30, textvariable=self.minlen_var, width=6).pack(side="left", padx=6)
+        ttk.Label(row, text="seconds (lower it if a short episode is missing)").pack(side="left")
+
+        ttk.Label(frm, text="Appearance", style="Section.TLabel").grid(row=8, column=0, columnspan=4, sticky="w", pady=(14, 2))
+        row = ttk.Frame(frm)
+        row.grid(row=9, column=0, columnspan=4, sticky="w")
+        for t in ("System", "Light", "Dark"):
+            ttk.Radiobutton(row, text=t, value=t, variable=self.theme_var,
+                            command=lambda: (self.apply_theme(), set_dark_titlebar(win, self.dark))).pack(side="left", padx=(0, 16))
+
+        ttk.Separator(frm).grid(row=10, column=0, columnspan=4, sticky="ew", pady=16)
+        bottom = ttk.Frame(frm)
+        bottom.grid(row=11, column=0, columnspan=4, sticky="ew")
+        ttk.Label(bottom, text=f"MKV Ripper build {APP_BUILD}" if APP_BUILD else "MKV Ripper (from source)",
+                  style="Muted.TLabel").pack(side="left")
+        ttk.Button(bottom, text="Done", style="Accent.TButton", command=win.destroy).pack(side="right")
+        ttk.Button(bottom, text="Check for app update",
+                   command=lambda: self.check_app_update(quiet=False)).pack(side="right", padx=8)
+        win.grab_set()
+
+    # ---- dependencies & updates ----
     def _startup_checks(self):
         missing = [name for name, var in (("MakeMKV", self.exe_var), ("MKVToolNix", self.mkvmerge_var))
                    if not var.get() or not os.path.isfile(var.get())]
@@ -503,100 +675,129 @@ class App(tk.Tk):
 
     # ---- layout ----
     def _build(self):
-        pad = dict(padx=6, pady=4)
-        top = ttk.Frame(self)
-        top.pack(fill="x", **pad)
+        root = ttk.Frame(self, padding=(20, 16, 20, 16))
+        root.pack(fill="both", expand=True)
 
-        ttk.Label(top, text="makemkvcon:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(top, textvariable=self.exe_var).grid(row=0, column=1, columnspan=4, sticky="ew", padx=4)
-        ttk.Button(top, text="Browse...", command=self.browse_exe).grid(row=0, column=5)
-        ttk.Label(top, text="mkvmerge:").grid(row=2, column=0, sticky="w")
-        ttk.Entry(top, textvariable=self.mkvmerge_var).grid(row=2, column=1, columnspan=4, sticky="ew", padx=4)
-        ttk.Button(top, text="Browse...", command=self.browse_mkvmerge).grid(row=2, column=5)
-        ttk.Label(top, text="(only needed for splitting)", foreground="#555").grid(row=2, column=6, sticky="w")
+        # header
+        head = ttk.Frame(root)
+        head.pack(fill="x", pady=(0, 12))
+        ttk.Label(head, text="MKV Ripper", style="Title.TLabel").pack(side="left")
+        ttk.Label(head, text="  Rip discs and name them for Plex", style="Muted.TLabel").pack(side="left", pady=(10, 0))
+        ttk.Button(head, text="\u2699  Settings", command=self.open_settings).pack(side="right")
 
-        ttk.Label(top, text="Drive:").grid(row=1, column=0, sticky="w")
-        self.drive_box = ttk.Combobox(top, textvariable=self.drive_var, state="readonly", width=50)
-        self.drive_box.grid(row=1, column=1, columnspan=2, sticky="ew", padx=4)
-        ttk.Button(top, text="Refresh drives", command=self.refresh_drives).grid(row=1, column=3, padx=2)
-        ttk.Label(top, text="Min length (sec):").grid(row=1, column=4, sticky="e")
-        ttk.Entry(top, textvariable=self.minlen_var, width=6).grid(row=1, column=5, sticky="w")
-        self.scan_btn = ttk.Button(top, text="Scan disc", command=self.scan)
-        self.scan_btn.grid(row=1, column=6, padx=4)
-        top.columnconfigure(1, weight=1)
+        # 1  disc
+        c1 = ttk.Frame(root, style="Card.TFrame", padding=14)
+        c1.pack(fill="x", pady=(0, 10))
+        ttk.Label(c1, text="1   Disc", style="Section.TLabel").pack(anchor="w", pady=(0, 8))
+        r = ttk.Frame(c1)
+        r.pack(fill="x")
+        self.drive_box = ttk.Combobox(r, textvariable=self.drive_var, state="readonly")
+        self.drive_box.pack(side="left", fill="x", expand=True)
+        ttk.Button(r, text="\u27f3", width=3, command=self.refresh_drives).pack(side="left", padx=8)
+        self.scan_btn = ttk.Button(r, text="Scan disc", style="Accent.TButton", width=14, command=self.scan)
+        self.scan_btn.pack(side="left")
 
-        # titles table
-        mid = ttk.Frame(self)
-        mid.pack(fill="both", expand=True, **pad)
-        cols = ("chk", "id", "name", "duration", "chapters", "size", "split", "newname")
-        self.tree = ttk.Treeview(mid, columns=cols, show="headings", selectmode="browse")
-        heads = {"chk": "Rip", "id": "#", "name": "Title name", "duration": "Length",
-                 "chapters": "Chapters", "size": "Size", "split": "Split at chapters",
-                 "newname": "Will be saved as"}
-        widths = {"chk": 40, "id": 40, "name": 190, "duration": 70, "chapters": 65, "size": 80,
-                  "split": 110, "newname": 300}
+        # 2  titles
+        c2 = ttk.Frame(root, style="Card.TFrame", padding=14)
+        c2.pack(fill="both", expand=True, pady=(0, 10))
+        top2 = ttk.Frame(c2)
+        top2.pack(fill="x", pady=(0, 8))
+        ttk.Label(top2, text="2   Pick titles", style="Section.TLabel").pack(side="left")
+        ttk.Button(top2, text="Select none", command=lambda: self.set_all(False)).pack(side="right")
+        ttk.Button(top2, text="Select all", command=lambda: self.set_all(True)).pack(side="right", padx=8)
+        self.split_btn = ttk.Button(top2, text="\u2702  Split into episodes...", command=self.edit_split)
+        self.split_btn.pack(side="right", padx=(0, 8))
+
+        tf = ttk.Frame(c2)
+        tf.pack(fill="both", expand=True)
+        cols = ("chk", "id", "duration", "chapters", "size", "episodes", "newname")
+        self.tree = ttk.Treeview(tf, columns=cols, show="headings", selectmode="browse", height=7)
+        heads = {"chk": "Rip", "id": "Title", "duration": "Length", "chapters": "Chapters", "size": "Size",
+                 "episodes": "Episodes", "newname": "Saved as"}
+        widths = {"chk": 50, "id": 60, "duration": 90, "chapters": 80, "size": 90, "episodes": 150, "newname": 380}
         for c in cols:
             self.tree.heading(c, text=heads[c])
-            self.tree.column(c, width=widths[c], anchor="center" if c in ("chk", "id", "chapters") else "w")
-        sb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
+            self.tree.column(c, width=widths[c], minwidth=40, stretch=(c == "newname"),
+                             anchor="w" if c in ("newname", "episodes") else "center")
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="right", fill="y")
         self.tree.bind("<Button-1>", self.on_click)
         self.tree.bind("<space>", self.on_space)
         self.tree.bind("<Double-1>", self.on_double)
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: self._update_split_btn())
+        self.tree.tag_configure("hint", foreground=self.warn)
 
-        sel = ttk.Frame(self)
-        sel.pack(fill="x", padx=6)
-        ttk.Button(sel, text="Check all", command=lambda: self.set_all(True)).pack(side="left")
-        ttk.Button(sel, text="Uncheck all", command=lambda: self.set_all(False)).pack(side="left", padx=4)
-        ttk.Button(sel, text="Split title...", command=self.edit_split).pack(side="left", padx=4)
-        ttk.Label(sel, text="Click a box (or Space) to check a title. Double-click a title holding "
-                            "several episodes to split it.").pack(side="left", padx=8)
+        self.empty_lbl = ttk.Label(c2, style="Muted.TLabel",
+                                   text="Insert a disc and click Scan disc. Click a row's box to rip it; "
+                                        "click its Episodes cell to split it into episodes.")
+        self.empty_lbl.pack(anchor="w", pady=(8, 0))
+        self.hint_row = ttk.Frame(c2)
+        self.hint_lbl = ttk.Label(self.hint_row, style="Hint.TLabel")
+        self.hint_lbl.pack(side="left")
+        self.hint_btn = ttk.Button(self.hint_row, text="Split it...", command=self._split_hinted)
+        self.hint_btn.pack(side="left", padx=10)
 
-        # naming + output
-        nm = ttk.LabelFrame(self, text="Naming")
-        nm.pack(fill="x", **pad)
-        modes = ttk.Frame(nm)
-        modes.grid(row=0, column=0, columnspan=6, sticky="w", padx=4, pady=(4, 0))
-        ttk.Radiobutton(modes, text="TV show (prefix + episode number)", value="tv",
-                        variable=self.mode_var).pack(side="left")
-        ttk.Radiobutton(modes, text="Movie", value="movie",
-                        variable=self.mode_var).pack(side="left", padx=16)
+        # 3  naming
+        c3 = ttk.Frame(root, style="Card.TFrame", padding=14)
+        c3.pack(fill="x", pady=(0, 10))
+        top3 = ttk.Frame(c3)
+        top3.pack(fill="x", pady=(0, 8))
+        ttk.Label(top3, text="3   Name and save", style="Section.TLabel").pack(side="left")
+        ttk.Radiobutton(top3, text="Movie", value="movie", variable=self.mode_var).pack(side="right")
+        ttk.Radiobutton(top3, text="TV show", value="tv", variable=self.mode_var).pack(side="right", padx=16)
 
-        # TV row
-        self.tv_row = ttk.Frame(nm)
-        self.tv_row.grid(row=1, column=0, columnspan=6, sticky="ew", padx=4, pady=4)
-        ttk.Label(self.tv_row, text="Prefix:").pack(side="left")
-        ttk.Entry(self.tv_row, textvariable=self.prefix_var, width=30).pack(side="left", padx=4)
-        ttk.Label(self.tv_row, text="First episode #:").pack(side="left", padx=(16, 4))
-        ttk.Spinbox(self.tv_row, from_=0, to=9999, textvariable=self.start_var, width=6).pack(side="left")
+        self.name_area = ttk.Frame(c3)
+        self.name_area.pack(fill="x")
+        self.tv_row = ttk.Frame(self.name_area)
+        ttk.Label(self.tv_row, text="Name prefix").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.tv_row, text="First episode").grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ttk.Entry(self.tv_row, textvariable=self.prefix_var).grid(row=1, column=0, sticky="ew")
+        ttk.Spinbox(self.tv_row, from_=0, to=9999, textvariable=self.start_var, width=6).grid(row=1, column=1, sticky="w", padx=(12, 0))
+        self.tv_row.columnconfigure(0, weight=1)
+        self.movie_row = ttk.Frame(self.name_area)
+        ttk.Label(self.movie_row, text="Movie name (Year)").grid(row=0, column=0, sticky="w")
+        ttk.Entry(self.movie_row, textvariable=self.movie_var).grid(row=1, column=0, sticky="ew")
+        self.movie_row.columnconfigure(0, weight=1)
+        self.example_lbl = ttk.Label(c3, style="Muted.TLabel")
+        self.example_lbl.pack(anchor="w", pady=(4, 8))
 
-        # Movie row
-        self.movie_row = ttk.Frame(nm)
-        ttk.Label(self.movie_row, text="Movie name (Year):").pack(side="left")
-        ttk.Entry(self.movie_row, textvariable=self.movie_var, width=40).pack(side="left", padx=4)
+        ttk.Label(c3, text="Save to folder").pack(anchor="w")
+        r = ttk.Frame(c3)
+        r.pack(fill="x")
+        ttk.Entry(r, textvariable=self.out_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(r, text="Browse...", command=self.browse_out).pack(side="left", padx=(8, 0))
 
-        self.example_lbl = ttk.Label(nm, text="", foreground="#555")
-        self.example_lbl.grid(row=2, column=0, columnspan=6, sticky="w", padx=4)
+        # footer
+        foot = ttk.Frame(root)
+        foot.pack(fill="x")
+        self.rip_btn = ttk.Button(foot, text="Rip checked titles", style="Accent.TButton", width=22, command=self.rip)
+        self.rip_btn.pack(side="left", ipady=4)
+        right = ttk.Frame(foot)
+        right.pack(side="left", fill="x", expand=True, padx=(16, 0))
+        self.pbar = ttk.Progressbar(right, maximum=65536)
+        self.pbar.pack(fill="x", pady=(2, 4))
+        sr = ttk.Frame(right)
+        sr.pack(fill="x")
+        ttk.Label(sr, textvariable=self.status_var, style="Muted.TLabel").pack(side="left")
+        ttk.Checkbutton(sr, text="Show details", variable=self.showlog_var, style="Switch.TCheckbutton",
+                        command=self._toggle_log).pack(side="right")
 
-        ttk.Label(nm, text="Output folder:").grid(row=3, column=0, sticky="w", padx=4, pady=4)
-        ttk.Entry(nm, textvariable=self.out_var).grid(row=3, column=1, columnspan=4, sticky="ew")
-        ttk.Button(nm, text="Browse...", command=self.browse_out).grid(row=3, column=5, padx=4)
-        nm.columnconfigure(4, weight=1)
-
-        # progress + log
-        bottom = ttk.Frame(self)
-        bottom.pack(fill="x", **pad)
-        self.rip_btn = ttk.Button(bottom, text="Rip checked titles", command=self.rip)
-        self.rip_btn.pack(side="left")
-        self.pbar = ttk.Progressbar(bottom, maximum=65536)
-        self.pbar.pack(side="left", fill="x", expand=True, padx=8)
-        ttk.Label(self, textvariable=self.status_var).pack(fill="x", padx=8)
-
-        self.log = tk.Text(self, height=7, state="disabled", wrap="word")
-        self.log.pack(fill="x", padx=6, pady=(2, 6))
+        self.log = tk.Text(root, height=8, state="disabled", wrap="word")
+        self._style_log()
         self._refresh_names()
+        self._update_split_btn()
+
+    def _toggle_log(self):
+        if self.showlog_var.get():
+            self.log.pack(fill="x", pady=(10, 0))
+        else:
+            self.log.pack_forget()
+
+    def _update_split_btn(self):
+        ok = bool(self.tree.focus()) and self.mode_var.get() == "tv" and not self.busy
+        self.split_btn.configure(state="normal" if ok else "disabled")
 
     # ---- helpers ----
     def log_line(self, text):
@@ -650,6 +851,7 @@ class App(tk.Tk):
         state = "disabled" if busy else "normal"
         self.scan_btn.configure(state=state)
         self.rip_btn.configure(state=state)
+        self._update_split_btn()
 
     def _exe(self):
         exe = self.exe_var.get().strip()
@@ -742,8 +944,12 @@ class App(tk.Tk):
         self.tree.delete(*self.tree.get_children())
         for t in titles:
             self.tree.insert("", "end", iid=str(t["id"]), values=(
-                CHECK_OFF, t["id"], t.get("name", ""), t.get("duration", ""),
+                CHECK_OFF, t["id"], t.get("duration", ""),
                 t.get("chapters", ""), t.get("size", ""), "", ""))
+        if titles:
+            first = str(titles[0]["id"])
+            self.tree.focus(first)
+            self.tree.selection_set(first)
         self._refresh_names()
 
     def toggle(self, iid):
@@ -758,8 +964,13 @@ class App(tk.Tk):
         if self.tree.identify_region(event.x, event.y) != "cell":
             return
         iid = self.tree.identify_row(event.y)
-        if iid and self.tree.identify_column(event.x) == "#1":
+        col = self.tree.identify_column(event.x)
+        if iid and col == "#1":
             self.toggle(iid)
+        elif iid and col == "#6" and self.mode_var.get() == "tv":
+            self.tree.focus(iid)
+            self.tree.selection_set(iid)
+            self.after(10, self.edit_split)
 
     def on_space(self, _event):
         iid = self.tree.focus()
@@ -796,82 +1007,129 @@ class App(tk.Tk):
             ep += count
         return plan
 
+    def _likely_multi(self, t):
+        """A long TV title with several chapters probably holds more than one episode."""
+        try:
+            chapters = int(t.get("chapters", "0"))
+        except ValueError:
+            chapters = 0
+        return (self.mode_var.get() == "tv" and duration_seconds(t.get("duration", "")) >= 70 * 60
+                and chapters >= 4 and not self.splits.get(t["id"]))
+
     def _refresh_names(self):
         movie_mode = self.mode_var.get() == "movie"
         if movie_mode:
-            self.tv_row.grid_remove()
-            self.movie_row.grid(row=1, column=0, columnspan=6, sticky="ew", padx=4, pady=4)
+            self.tv_row.pack_forget()
+            self.movie_row.pack(fill="x")
             self.example_lbl.configure(
-                text="e.g. The Matrix (1999) -> saved as  The Matrix (1999)\\The Matrix (1999).mkv.  "
-                     "The first checked title is the movie; any others are saved as extras.")
+                text="Saved as  The Matrix (1999)\\The Matrix (1999).mkv.  The first checked title is the movie; "
+                     "any others are saved beside it as Plex extras.")
         else:
-            self.movie_row.grid_remove()
-            self.tv_row.grid()
+            self.movie_row.pack_forget()
+            self.tv_row.pack(fill="x")
             start = self._start()
             if start is None:
-                self.example_lbl.configure(text="(first episode # must be a number)")
+                self.example_lbl.configure(text="First episode must be a number.")
             else:
                 self.example_lbl.configure(
-                    text="e.g. " + ", ".join(build_names(self.prefix_var.get(), start, 3)) + " ...")
+                    text="Checked titles are numbered top to bottom:  "
+                         + ",  ".join(build_names(self.prefix_var.get(), start, 3)) + "  ...")
         order = [t for t in self.titles if t["id"] in self.checked]
         plan = self._plan(order) or []
         name_for = {t["id"]: names for t, names, _ in plan}
+        self.hinted = None
         for t in self.titles:
             iid = str(t["id"])
             on = t["id"] in self.checked
             pts = self.splits.get(t["id"], [])
             self.tree.set(iid, "chk", CHECK_ON if on else CHECK_OFF)
-            self.tree.set(iid, "split", ",".join(map(str, pts)) + (" (off in Movie mode)" if pts and movie_mode else ""))
+            multi = self._likely_multi(t)
+            if movie_mode:
+                eps = "\u2014"
+            elif pts:
+                eps = f"{len(pts) + 1}   \u2702 at ch. {','.join(map(str, pts))}"
+            elif multi:
+                eps = "1   \u26a0 split?"
+            else:
+                eps = "1   \u2702"
+            self.tree.set(iid, "episodes", eps)
+            self.tree.item(iid, tags=("hint",) if multi else ())
+            if multi and on and self.hinted is None:
+                self.hinted = t
             names = name_for.get(t["id"], [])
             if len(names) > 1:
-                shown = f"{names[0]} ... {names[-1]}  ({len(names)} files)"
+                shown = f"{names[0]}  \u2192  {names[-1]}"
             else:
                 shown = names[0] if names else ""
             self.tree.set(iid, "newname", shown)
 
+        if self.titles:
+            self.empty_lbl.pack_forget()
+        if self.hinted is not None:
+            t = self.hinted
+            self.hint_lbl.configure(text=f"\u26a0  Title {t['id']} is {t.get('duration', '')} long. It probably holds "
+                                         f"several episodes.")
+            self.hint_row.pack(anchor="w", pady=(8, 0))
+        else:
+            self.hint_row.pack_forget()
+        self._update_split_btn()
+
+    def _split_hinted(self):
+        if self.hinted is not None:
+            iid = str(self.hinted["id"])
+            self.tree.focus(iid)
+            self.tree.selection_set(iid)
+            self.edit_split()
+
     # ---- splitting ----
     def on_double(self, event):
         iid = self.tree.identify_row(event.y)
-        if iid and self.tree.identify_column(event.x) != "#1":
+        if iid and self.tree.identify_column(event.x) not in ("#1", "#6") and self.mode_var.get() == "tv":
             self.tree.focus(iid)
             self.tree.selection_set(iid)
             self.edit_split()
 
     def edit_split(self):
         iid = self.tree.focus()
-        if not iid:
-            messagebox.showinfo("MKV Ripper", "Click a title in the list first, then Split title...")
+        if not iid or self.busy:
             return
         t = next(x for x in self.titles if str(x["id"]) == iid)
         try:
             chapters = int(t.get("chapters", "0"))
         except ValueError:
             chapters = 0
+        mins = duration_seconds(t.get("duration", "")) // 60
 
         win = tk.Toplevel(self)
         win.title(f"Split title {t['id']}")
         win.transient(self)
         win.resizable(False, False)
-        frm = ttk.Frame(win, padding=12)
+        set_dark_titlebar(win, self.dark)
+        frm = ttk.Frame(win, padding=20)
         frm.pack(fill="both", expand=True)
-        ttk.Label(frm, text=f"Title {t['id']}: {t.get('name', '')}   {t.get('duration', '')},  "
-                            f"{chapters or '?'} chapters", font=("", 10, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
-        ttk.Label(frm, justify="left", wraplength=440, text=(
-            "Enter the chapter numbers where episode 2, 3, ... START. Chapter 1 is always the start "
-            "of the first episode. Example for 3 episodes: 6,11\n\n"
-            "To find them, play the disc (or a test rip) in VLC and use Playback > Chapter to see "
-            "which chapter each episode's opening begins on.")).grid(row=1, column=0, columnspan=4, sticky="w", pady=8)
+        ttk.Label(frm, text=f"Split title {t['id']} into episodes", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(frm, text=f"{t.get('duration', '')} long  \u00b7  {chapters or '?'} chapters",
+                  style="Muted.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 14))
 
-        ttk.Label(frm, text="New episode starts at chapters:").grid(row=2, column=0, sticky="w")
+        # easy way: how many episodes
+        ttk.Label(frm, text="How many episodes are on this title?").grid(row=2, column=0, sticky="w")
+        guess_eps = max(2, len(self.splits.get(t["id"], [])) + 1)
+        if not self.splits.get(t["id"]) and mins >= 70:
+            guess_eps = max(2, round(mins / 45))      # typical hour-long-slot drama runs ~45 min
+        eps_var = tk.StringVar(value=str(guess_eps))
+        ttk.Spinbox(frm, from_=2, to=50, textvariable=eps_var, width=5).grid(row=2, column=1, sticky="w", padx=8)
+        ttk.Button(frm, text="Fill in chapters", command=lambda: guess()).grid(row=2, column=2, sticky="w")
+
+        ttk.Label(frm, text="New episodes start at chapters").grid(row=3, column=0, sticky="w", pady=(14, 0))
         pts_var = tk.StringVar(value=",".join(map(str, self.splits.get(t["id"], []))))
-        entry = ttk.Entry(frm, textvariable=pts_var, width=24)
-        entry.grid(row=2, column=1, columnspan=3, sticky="w", padx=4)
-
-        ttk.Label(frm, text="Or guess from episode count:").grid(row=3, column=0, sticky="w", pady=(8, 0))
-        eps_var = tk.StringVar(value=str(max(2, len(self.splits.get(t["id"], [])) + 1)))
-        ttk.Spinbox(frm, from_=2, to=50, textvariable=eps_var, width=5).grid(row=3, column=1, sticky="w", padx=4, pady=(8, 0))
-        hint = ttk.Label(frm, text="", foreground="#555", wraplength=440, justify="left")
-        hint.grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        entry = ttk.Entry(frm, textvariable=pts_var, width=20)
+        entry.grid(row=3, column=1, columnspan=2, sticky="w", padx=8, pady=(14, 0))
+        hint = ttk.Label(frm, text="", style="Muted.TLabel", wraplength=460, justify="left")
+        hint.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Label(frm, style="Muted.TLabel", wraplength=460, justify="left", text=(
+            "List the chapter where episode 2, 3, ... begins (episode 1 always starts at chapter 1). "
+            "Example for 3 episodes: 6,11. If unsure, play the disc in VLC and use Playback > Chapter "
+            "to see where each episode's opening starts.")).grid(row=5, column=0, columnspan=3, sticky="w", pady=(10, 0))
 
         def guess():
             try:
@@ -880,13 +1138,14 @@ class App(tk.Tk):
                 return
             g = guess_split_points(chapters, n)
             if g is None:
-                hint.configure(text=f"{chapters} chapters don't divide evenly into {n} episodes. "
-                                    "Check the chapters in VLC and type them in.")
+                hint.configure(text=f"{chapters} chapters don't divide evenly into {n} episodes, so type "
+                                    "the chapters in yourself.")
             else:
                 pts_var.set(",".join(map(str, g)))
-                hint.configure(text=f"Guessed {chapters // n} chapters per episode. This is only a guess: "
-                                    "check one episode boundary in VLC before ripping.")
-        ttk.Button(frm, text="Guess", command=guess).grid(row=3, column=2, sticky="w", pady=(8, 0))
+                hint.configure(text=f"Filled in {chapters // n} chapters per episode. This is a guess: check one "
+                                    "episode change in VLC if you can.")
+        if not pts_var.get():
+            guess()
 
         def save():
             try:
@@ -907,12 +1166,13 @@ class App(tk.Tk):
             save()
 
         btns = ttk.Frame(frm)
-        btns.grid(row=5, column=0, columnspan=4, sticky="e", pady=(12, 0))
-        ttk.Button(btns, text="Don't split", command=clear).pack(side="left", padx=4)
-        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=4)
-        ttk.Button(btns, text="OK", command=save).pack(side="left", padx=4)
+        btns.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(18, 0))
+        ttk.Button(btns, text="Don't split", command=clear).pack(side="left")
+        ttk.Button(btns, text="Split", style="Accent.TButton", width=10, command=save).pack(side="right")
+        ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="right", padx=8)
         entry.focus_set()
         win.bind("<Return>", lambda _e: save())
+        win.bind("<Escape>", lambda _e: win.destroy())
         win.grab_set()
 
     def rip(self):
