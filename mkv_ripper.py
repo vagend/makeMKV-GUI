@@ -84,7 +84,17 @@ def find_mkvmerge():
 # Dependencies (winget) and app self-update (GitHub Releases)
 # ----------------------------------------------------------------------------
 
-APP_VERSION = "1.0.0"
+def _read_build():
+    """Build number stamped in by GitHub Actions (0 when running the .py from source)."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    try:
+        with open(os.path.join(base, "APP_BUILD")) as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+APP_BUILD = _read_build()
 GITHUB_REPO = "vagend/makeMKV-GUI"
 EXE_ASSET = "MKVRipper.exe"
 WINGET_IDS = {"MakeMKV": "GuinpinSoft.MakeMKV", "MKVToolNix": "MoritzBunkus.MKVToolNix"}
@@ -119,13 +129,13 @@ def winget_run(action, package, on_line=None):
     return proc.returncode, tail
 
 
-def parse_version(text):
-    nums = re.findall(r"\d+", text or "")
-    return tuple(int(n) for n in nums[:3]) if nums else (0,)
+def parse_build(title):
+    m = re.search(r"build\s+(\d+)", title or "", re.I)
+    return int(m.group(1)) if m else 0
 
 
 def latest_release():
-    """Return (version tag, download URL of MKVRipper.exe or None) from GitHub."""
+    """Return (build number, download URL of MKVRipper.exe or None) from GitHub's latest release."""
     req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
                                  headers={"Accept": "application/vnd.github+json",
                                           "User-Agent": "MKVRipper"})
@@ -133,7 +143,7 @@ def latest_release():
         data = json.load(r)
     url = next((a["browser_download_url"] for a in data.get("assets", [])
                 if a.get("name", "").lower() == EXE_ASSET.lower()), None)
-    return data.get("tag_name", ""), url
+    return parse_build(data.get("name", "")), url
 
 
 def is_frozen():
@@ -378,7 +388,7 @@ class App(tk.Tk):
         self.msgs = queue.Queue()
 
         cleanup_old_exe()
-        self.title(f"MKV Ripper {APP_VERSION}")
+        self.title(f"MKV Ripper (build {APP_BUILD})" if APP_BUILD else "MKV Ripper (from source)")
         self._build_menu()
         self._build()
         for v in (self.prefix_var, self.start_var, self.movie_var, self.mode_var):
@@ -457,30 +467,29 @@ class App(tk.Tk):
     def check_app_update(self, quiet=True):
         def work():
             try:
-                tag, url = latest_release()
+                build, url = latest_release()
             except Exception as e:
                 if not quiet:
                     self.post("error", f"Couldn't check GitHub for updates:\n{e}")
                 return
-            if parse_version(tag) <= parse_version(APP_VERSION) or not url:
+            if build <= APP_BUILD or not url:
                 if not quiet:
-                    self.post("info", f"You have the latest version ({APP_VERSION}).")
+                    self.post("info", f"You have the latest build ({APP_BUILD}).")
                 return
-            self.after(0, lambda: self._offer_update(tag, url))
+            self.after(0, lambda: self._offer_update(build, url))
         threading.Thread(target=work, daemon=True).start()
 
-    def _offer_update(self, tag, url):
+    def _offer_update(self, build, url):
         if not is_frozen():
-            messagebox.showinfo("MKV Ripper", f"Version {tag} is available on GitHub "
-                                              f"(you're running the .py script {APP_VERSION}). "
-                                              "Pull the repo or download MKVRipper.exe from Releases.")
+            messagebox.showinfo("MKV Ripper", f"Build {build} is on GitHub. You're running the .py "
+                                              "script; pull the repo or download MKVRipper.exe from Releases.")
             return
         if self.busy or not messagebox.askyesno(
-                "MKV Ripper", f"MKV Ripper {tag} is available (you have {APP_VERSION}). Update now? "
+                "MKV Ripper", f"MKV Ripper build {build} is available (you have build {APP_BUILD}). Update now? "
                               "The app will restart."):
             return
         self._set_busy(True)
-        self.status_var.set(f"Downloading MKV Ripper {tag}...")
+        self.status_var.set(f"Downloading MKV Ripper build {build}...")
 
         def work():
             try:

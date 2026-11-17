@@ -24,9 +24,9 @@ winget comes with Windows 11 and current Windows 10 as part of "App Installer". 
 
 With Python 3 installed: `python mkv_ripper.py`
 
-### Releasing a new version
+### How releases work
 
-Bump `APP_VERSION` in `mkv_ripper.py` and commit. Then on GitHub go to **Releases > Draft a new release**, create a tag matching the version (e.g. `v1.0.1`), and publish. GitHub Actions builds `MKVRipper.exe` and attaches it to the release within a couple of minutes. (Pushing a `v*` tag from git works too.)
+Every push to `main` (except README-only changes) builds `MKVRipper.exe` on GitHub Actions and replaces the **latest** release with it, titled with the build number. Copies of the app compare their build number to that release and offer to update. Nothing to tag by hand.
 
 ## Usage
 

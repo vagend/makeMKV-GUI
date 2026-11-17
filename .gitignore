@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 *.mkv
 .mkvrip_*/
+APP_BUILD
