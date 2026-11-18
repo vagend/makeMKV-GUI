@@ -39,6 +39,10 @@ ATTR_SIZE = 10
 ATTR_SOURCE = 16
 ATTR_SOURCE_TITLE = 24   # the disc's own title number on DVDs (what VLC's Title menu shows)
 ATTR_OUTPUT_NAME = 27
+# stream (SINFO) attributes, from MakeMKV's apdefs.h
+S_TYPE, S_NAME, S_LANG, S_LANG_NAME, S_CODEC, S_CODEC_SHORT = 1, 2, 3, 4, 5, 6
+S_CHANNELS, S_TREE_INFO, S_FLAGS_TEXT = 14, 30, 39
+STREAM_TYPES = {"6201": "video", "6202": "audio", "6203": "subtitles"}
 
 INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 
@@ -476,11 +480,12 @@ def guess_split_points(chapters, episodes):
     return [1 + step * k for k in range(1, episodes)]
 
 
-def split_file(mkvmerge, src, points, work_dir, on_progress=None):
-    """Split src before the given chapters (lossless). Returns the part files in order."""
+def split_file(mkvmerge, src, points, work_dir, on_progress=None, extra_args=()):
+    """Split src before the given chapters (lossless). extra_args (e.g. which tracks to keep) go in the
+    same pass. Returns the part files in order."""
     os.makedirs(work_dir, exist_ok=True)
     out = os.path.join(work_dir, "part.mkv")
-    args = [mkvmerge, "-o", out, "--split", "chapters:" + ",".join(map(str, points)), src]
+    args = [mkvmerge, "-o", out, "--split", "chapters:" + ",".join(map(str, points))] + list(extra_args) + [src]
     proc = _popen(args)
     tail = []
     for line in proc.stdout:
@@ -671,7 +676,179 @@ def scan_titles(exe, disc_index, minlength, on_line=None):
                 t["source"] = value
             elif attr == ATTR_OUTPUT_NAME:
                 t["output"] = value
-    return [titles[k] for k in sorted(titles)]
+        # SINFO:title_index,stream_index,attribute_id,code,value
+        elif kind == "SINFO" and len(f) >= 5:
+            try:
+                tid, sn, attr = int(f[0]), int(f[1]), int(f[2])
+            except ValueError:
+                continue
+            t = titles.setdefault(tid, {"id": tid})
+            s = t.setdefault("_streams", {}).setdefault(sn, {"n": sn})
+            code, value = f[3], f[4]
+            if attr == S_TYPE:
+                s["type"] = STREAM_TYPES.get(code, value.lower())
+            elif attr == S_LANG:
+                s["lang"] = value.lower()
+            elif attr == S_LANG_NAME:
+                s["lang_name"] = value
+            elif attr == S_CODEC:
+                s["codec"] = value
+            elif attr == S_CODEC_SHORT:
+                s["codec_short"] = value
+            elif attr == S_CHANNELS and value.isdigit():
+                s["channels"] = int(value)
+            elif attr == S_NAME:
+                s["name"] = value
+            elif attr == S_TREE_INFO:
+                s["desc"] = value
+            elif attr == S_FLAGS_TEXT:
+                s["flags"] = value
+    out = []
+    for k in sorted(titles):
+        t = titles[k]
+        streams = t.pop("_streams", {})
+        t["tracks"] = [streams[n] for n in sorted(streams) if streams[n].get("type") in ("audio", "subtitles")]
+        out.append(t)
+    return out
+
+
+# ---- choosing audio and subtitle tracks ----
+# MakeMKV's command-line tool rips the tracks its own selection rule picks; MKV Ripper then keeps only
+# the tracks the person ticked, with mkvmerge (in the same pass as splitting episodes).
+
+# MakeMKV's default track rule (what it uses when its preference has never been changed)
+MAKEMKV_DEFAULT_RULE = "-sel:all,+sel:(favlang|nolang|single),-sel:(havemulti|havecore),-sel:mvcvideo,=100:all,-10:favlang"
+COPY_ALL_RULE = "+sel:all"
+_MAKEMKV_KEY = r"Software\MakeMKV"
+
+
+def makemkv_rule():
+    """MakeMKV's 'Default selection rule' preference, or None where it can't be read (a Mac).
+    Windows keeps MakeMKV's preferences in the registry, shared by MakeMKV and its command-line tool."""
+    if sys.platform != "win32":
+        return None
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _MAKEMKV_KEY) as k:
+            return str(winreg.QueryValueEx(k, "app_DefaultSelectionString")[0]) or MAKEMKV_DEFAULT_RULE
+    except OSError:
+        return MAKEMKV_DEFAULT_RULE
+
+
+def rule_copies_all(rule):
+    """True if a MakeMKV selection rule ends up selecting every track ('+sel:all' with nothing
+    taking tracks away after it)."""
+    if not rule:
+        return False
+    toks = [t.strip() for t in rule.split(",") if t.strip()]
+    last = max((i for i, t in enumerate(toks) if t == "+sel:all"), default=-1)
+    harmless = {"-sel:mvcvideo"}            # only drops 3D video, never audio or subtitles
+    return last >= 0 and not any(t.startswith("-sel") and t not in harmless for t in toks[last + 1:])
+
+
+def set_makemkv_rule(rule):
+    """Change MakeMKV's 'Default selection rule' (Windows). Returns the previous value ('' if unset)."""
+    import winreg
+    old = ""
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _MAKEMKV_KEY) as k:
+            old = str(winreg.QueryValueEx(k, "app_DefaultSelectionString")[0])
+    except OSError:
+        pass
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, _MAKEMKV_KEY) as k:
+        if rule:
+            winreg.SetValueEx(k, "app_DefaultSelectionString", 0, winreg.REG_SZ, rule)
+        else:
+            try:
+                winreg.DeleteValue(k, "app_DefaultSelectionString")
+            except OSError:
+                pass
+    return old
+
+
+def _norm_codec(c):
+    c = (c or "").upper()
+    return "A_PCM" if c.startswith(("A_LPCM", "A_PCM")) else c
+
+
+def file_tracks(mkvmerge, path):
+    """Tracks in a ripped file: [{"id", "type", "lang", "codec", "channels"}] from mkvmerge -J."""
+    proc = subprocess.run([mkvmerge, "-J", path], capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", creationflags=0x08000000 if sys.platform == "win32" else 0)
+    data = json.loads(proc.stdout or "{}")
+    out = []
+    for t in data.get("tracks", []):
+        p = t.get("properties", {})
+        out.append({"id": t.get("id"), "type": t.get("type"), "lang": (p.get("language") or "und").lower(),
+                    "codec": p.get("codec_id", ""), "channels": p.get("audio_channels")})
+    return out
+
+
+def match_tracks(disc, ripped):
+    """Pair the disc's tracks (from the scan) with the ripped file's tracks, per type.
+    Returns {disc stream n: file track id}. If MakeMKV ripped every track of a type, they pair in
+    order; otherwise each disc track pairs with the next file track of the same language and format."""
+    pairs = {}
+    for kind in ("audio", "subtitles"):
+        d = [t for t in disc if t.get("type") == kind]
+        f = [t for t in ripped if t.get("type") == kind]
+        if len(d) == len(f):
+            pairs.update({a["n"]: b["id"] for a, b in zip(d, f)})
+            continue
+        j = 0
+        for a in d:
+            for k in range(j, len(f)):
+                b = f[k]
+                same_lang = a.get("lang", "und") in (b["lang"], "und") or b["lang"] == "und"
+                same_codec = not a.get("codec") or not b["codec"] or _norm_codec(a["codec"]) == _norm_codec(b["codec"])
+                same_ch = not a.get("channels") or not b.get("channels") or a["channels"] == b["channels"]
+                if same_lang and same_codec and same_ch:
+                    pairs[a["n"]] = b["id"]
+                    j = k + 1
+                    break
+    return pairs
+
+
+def track_label(t):
+    """Short human description of a disc track, e.g. 'English · Dolby Digital 5.1'."""
+    if t.get("desc"):
+        return t["desc"]
+    bits = [t.get("lang_name") or t.get("lang") or "Unknown language", t.get("codec_short") or t.get("codec") or ""]
+    if t.get("name"):
+        bits.append(t["name"])
+    return " · ".join(b for b in bits if b)
+
+
+def track_filter(disc, chosen, ripped):
+    """mkvmerge options that keep only the chosen tracks, plus labels of chosen tracks MakeMKV didn't rip.
+    Returns (args, missing). args is [] when the file already holds exactly what was chosen."""
+    pairs = match_tracks(disc, ripped)
+    chosen = set(chosen)
+    args, missing = [], [track_label(t) for t in disc if t["n"] in chosen and t["n"] not in pairs]
+    for kind, keep_opt, none_opt in (("audio", "--audio-tracks", "--no-audio"),
+                                     ("subtitles", "--subtitle-tracks", "--no-subtitles")):
+        in_file = [t["id"] for t in ripped if t["type"] == kind]
+        keep = sorted(pairs[t["n"]] for t in disc if t.get("type") == kind and t["n"] in chosen and t["n"] in pairs)
+        if sorted(in_file) == keep:
+            continue
+        args += [keep_opt, ",".join(map(str, keep))] if keep else [none_opt]
+    return args, missing
+
+
+def remux_tracks(mkvmerge, src, dst, args, on_progress=None):
+    """Copy src to dst keeping only some tracks (lossless)."""
+    proc = _popen([mkvmerge, "-o", dst] + args + [src])
+    tail = []
+    for line in proc.stdout:
+        line = line.strip()
+        m = re.search(r"(\d+)%", line)
+        if m and on_progress:
+            on_progress(int(m.group(1)))
+        elif line:
+            tail = (tail + [line])[-5:]
+    proc.wait()
+    if proc.returncode >= 2:
+        raise RuntimeError("mkvmerge failed:\n" + "\n".join(tail))
 
 
 def build_names(prefix, start, count, ext=".mkv"):
@@ -730,11 +907,14 @@ def check_prefix(prefix):
 
 def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
               mkvmerge=None, split_points=None, on_split_progress=None, fallback_path=None,
-              on_review=None):
+              on_review=None, tracks=None, notes=None):
     """Rip one title into a temp folder, optionally split it at chapters, then move the
     result(s) to final_paths (one path, or one per episode when splitting).
     If splitting fails and fallback_path is given, the whole rip is saved there instead
-    (a multi-episode file like S1E1-E3.mkv). Returns 'ok' or 'fallback: <reason>'."""
+    (a multi-episode file like S1E1-E3.mkv). Returns 'ok' or 'fallback: <reason>'.
+    tracks = (the title's disc tracks from the scan, stream numbers to keep): only those audio and
+    subtitle tracks are kept. Anything worth telling the person is appended to notes."""
+    notes = notes if notes is not None else []
     if isinstance(final_paths, str):
         final_paths = [final_paths]
     out_dir = os.path.dirname(final_paths[0])
@@ -748,8 +928,35 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
             raise RuntimeError(f"MakeMKV produced no file for title {title_id} (exit code {code}).")
         ripped = os.path.join(tmp, max(mkvs, key=lambda f: os.path.getsize(os.path.join(tmp, f))))
 
+        keep_args = []
+        if tracks is not None:
+            disc_tracks, chosen = tracks
+            have_merge = bool(mkvmerge) and os.path.isfile(mkvmerge)
+            if not have_merge:
+                notes.append("MKVToolNix isn't installed, so every audio and subtitle track MakeMKV ripped was kept")
+            else:
+                try:
+                    keep_args, missing = track_filter(disc_tracks, chosen, file_tracks(mkvmerge, ripped))
+                    if missing:
+                        notes.append("MakeMKV didn't rip " + "; ".join(missing) +
+                                     ". Its own track rule leaves some tracks out: see Audio & subtitles")
+                except Exception as e:  # noqa: BLE001 - keep everything rather than lose a track
+                    keep_args = []
+                    notes.append(f"Couldn't sort out the tracks ({e}), so all of them were kept")
+            if keep_args and on_line:
+                on_line("MSG", ["", "", "", "Keeping chosen tracks: mkvmerge " + " ".join(keep_args)])
+
+        def save_whole(dest):
+            """Save the rip as one file, keeping only the chosen tracks."""
+            if keep_args:
+                trimmed = os.path.join(tmp, "tracks.mkv")
+                remux_tracks(mkvmerge, ripped, trimmed, keep_args, on_split_progress)
+                os.replace(trimmed, dest)
+            else:
+                os.replace(ripped, dest)
+
         if not split_points:
-            os.replace(ripped, final_paths[0])
+            save_whole(final_paths[0])
             return "ok"
 
         try:
@@ -767,7 +974,7 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
                 if split_points.get("review") and on_review:
                     answer = on_review(times, total, pts, n)    # waits for the person to check the lengths
                     if answer == "whole":
-                        os.replace(ripped, fallback_path)
+                        save_whole(fallback_path)
                         return "whole"
                     pts = answer
                 if not pts:
@@ -777,13 +984,17 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
                     on_line("MSG", ["", "", "", "Splitting before chapters " + ", ".join(
                         f"{c} ({fmt(times[c - 1])})" for c in pts)])
                 split_points = pts
-            parts = split_file(mkvmerge, ripped, split_points, os.path.join(tmp, "parts"), on_split_progress)
+            parts = split_file(mkvmerge, ripped, split_points, os.path.join(tmp, "parts"), on_split_progress,
+                               keep_args)
             if len(parts) != len(final_paths):
                 raise RuntimeError(f"expected {len(final_paths)} episodes but the split made {len(parts)}")
         except Exception as e:
             if not fallback_path:
                 raise
-            os.replace(ripped, fallback_path)
+            try:
+                save_whole(fallback_path)
+            except Exception:  # noqa: BLE001 - don't lose the rip over the track trimming
+                os.replace(ripped, fallback_path)
             return f"fallback: {e}"
         if len(parts) != len(final_paths):
             # Don't lose the rip: keep the unsplit file so it can be split by hand.

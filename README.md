@@ -48,11 +48,15 @@ Every push to `main` (except README-only changes) builds the Windows app (`MKVRi
 2. Tick the titles to rip. If a disc has a "Play all" title (all the episodes joined together), MKV Ripper says so and ticks the separate episode titles for you.
 3. Choose **TV show** or **Movie** and fill in the name. The **Saved as** column shows each file name before anything is ripped.
 4. If one title holds several episodes, click its **Episodes** label (it says **Several episodes?** when the title is long). Pick how many episodes it holds, then let MKV Ripper find the most even cuts or type the chapters yourself. Either way you see each episode's length before ripping. You can also keep it as one multi-episode file, like `S01E01-E03.mkv`.
-5. Pick the folder to save to and click **Rip**.
+5. To choose audio and subtitles, click a title's **Audio · Subs** button and tick what to keep. Tracks in your languages (Settings > Audio & subtitles, `eng` to start) are ticked by default, and the same choices can be applied to every selected title.
+6. Pick the folder to save to and click **Rip**.
 
 For a multi-disc set, set **First episode** to continue from the last disc (e.g. 4 for disc 2 of a 3-per-disc set).
 
 ## Notes
+
+- **Movies:** tick **Put the movie in its own folder** to save `Movie (Year)/Movie (Year).mkv`; leave it off to save `Movie (Year).mkv` straight in the folder you pick. The app remembers your choice.
+- **Audio and subtitles:** MakeMKV copies only the tracks its own selection rule allows; MKV Ripper then keeps the ones you ticked (with MKVToolNix). If a ticked track was left out by MakeMKV, the app tells you. On Windows the track dialog can switch MakeMKV's rule to copy every track (and Settings can put it back); on a Mac, set it in MakeMKV under Preferences > Advanced (Expert mode) to `+sel:all`.
 
 - **Settings > Hide titles shorter than** skips short titles (default 120 seconds). Lower it if a short episode is missing.
 - If a split doesn't work out, the title is kept as one multi-episode file (e.g. `S01E01-E03.mkv`), so nothing has to be ripped again.

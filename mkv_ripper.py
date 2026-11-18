@@ -52,6 +52,7 @@ class Api:
             "update": None,           # {"build": n} when a newer build is on GitHub
             "review": None,           # a split waiting for the person to check episode lengths
             "move_offer": core.mac_outside_applications(),   # Mac: offer to move into Applications
+            "track_rule": None,       # {"copies_all": bool|None, "can_set": bool, "changed": bool}
         }
         self._review_event = threading.Event()
         self._review_answer = None
@@ -117,6 +118,33 @@ class Api:
             self._set(status=f[2])
 
     # ---- called by the page ----
+    def _track_rule(self):
+        try:
+            rule = core.makemkv_rule()
+        except Exception:  # noqa: BLE001
+            rule = None
+        return {"copies_all": None if rule is None else core.rule_copies_all(rule),
+                "can_set": sys.platform == "win32",
+                "changed": "makemkv_rule_before" in self._settings}
+
+    def set_makemkv_copy_all(self, on=True):
+        """Windows: make MakeMKV rip every track (so any can be chosen), or put its old rule back."""
+        if sys.platform != "win32":
+            return {"error": "Change it in MakeMKV: Preferences > Advanced (turn on Expert mode first)."}
+        try:
+            if on:
+                old = core.set_makemkv_rule(core.COPY_ALL_RULE)
+                if "makemkv_rule_before" not in self._settings:
+                    self.save_settings({"makemkv_rule_before": old})
+            else:
+                core.set_makemkv_rule(self._settings.get("makemkv_rule_before", ""))
+                self._settings.pop("makemkv_rule_before", None)
+                core.save_settings(self._settings)
+        except OSError as e:
+            return {"error": f"Couldn't change MakeMKV's setting: {e}"}
+        self._set(track_rule=self._track_rule())
+        return {"ok": True, "track_rule": self._s["track_rule"]}
+
     def get_state(self, log_from=0):
         with self._lock:
             st = dict(self._s)
@@ -186,6 +214,7 @@ class Api:
                         got += 1
             self._logline(f"Chapter times read from the disc for {got} title(s)" if got
                           else "Chapter times will be read after ripping (couldn't read them from the disc)")
+            self._s["track_rule"] = self._track_rule()
             with self._lock:
                 self._s.update(titles=titles, play_all=play_all, scanned={"disc": disc, "minlen": minlen},
                                scan_id=self._s["scan_id"] + 1,
@@ -269,6 +298,7 @@ class Api:
             if any(pts for _, _, pts, _ in plan) and not mkvmerge:
                 return {"confirm": "nosplit"}
         by_id = {t["id"]: t for t in self._s["titles"]}
+        chosen_tracks = {r["id"]: r["tracks"] for r in req.get("titles", []) if isinstance(r.get("tracks"), list)}
         disc, minlen = sc["disc"], sc["minlen"]
 
         def work():
@@ -286,12 +316,20 @@ class Api:
                     self._logline(f"Will split into {pts['episodes']} episodes; you'll check the lengths before it splits")
                 elif pts:
                     self._logline(f"Will split before chapters {','.join(map(str, pts))}")
+                tnotes = []
+                tr = None
+                if tid in chosen_tracks and by_id.get(tid, {}).get("tracks"):
+                    tr = (by_id[tid]["tracks"], chosen_tracks[tid])
                 result = core.rip_title(exe, disc, minlen, tid, paths, self._robot, mkvmerge=mkvmerge,
+                                        tracks=tr, notes=tnotes,
                                         split_points=pts, fallback_path=fallback,
                                         on_review=lambda times, total, p, n, lab=lab, names=paths: self._ask_review(
                                             lab, times, total, p, n, [os.path.basename(x) for x in names]),
                                         on_split_progress=lambda pct: self._set(progress=pct / 100,
                                                                                 status=f"Splitting title {lab}..."))
+                for t in tnotes:
+                    self._logline(f"Title {lab}: {t}")
+                    notes.append(f"Title {lab}: {t}")
                 if result == "whole":
                     self._logline(f"Title {lab} kept as one file: {os.path.basename(fallback)}")
                     done += 1

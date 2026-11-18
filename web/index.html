@@ -112,7 +112,7 @@ label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; co
 /* ---------- title list ---------- */
 .tlist { flex: 1; min-height: 120px; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2);
   scrollbar-width: thin; }
-.trow { display: grid; grid-template-columns: 24px 54px 74px 80px 84px minmax(160px, 196px) minmax(0, 1fr);
+.trow { display: grid; grid-template-columns: 24px 54px 74px 70px 76px minmax(150px, 186px) 128px minmax(0, 1fr);
   gap: 12px; align-items: center; padding: 0 14px; min-height: 44px; border-bottom: 1px solid var(--border); }
 .trow:last-child { border-bottom: 0; }
 .trow.head { min-height: 34px; position: sticky; top: 0; z-index: 1; background: var(--surface-2); font-size: 11.5px;
@@ -140,7 +140,7 @@ label.f { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; co
 .empty svg { width: 42px; height: 42px; color: var(--faint); stroke-width: 1.5; margin-bottom: 8px; }
 .empty b { display: block; color: var(--text); font-size: 15px; margin-bottom: 4px; }
 .listbar { display: flex; align-items: center; gap: 6px; margin-left: auto; }
-@media (max-width: 980px) { .trow { grid-template-columns: 24px 50px 70px 0 0 minmax(150px, 180px) minmax(0, 1fr); gap: 10px; }
+@media (max-width: 980px) { .trow { grid-template-columns: 24px 50px 70px 0 0 minmax(150px, 180px) 124px minmax(0, 1fr); gap: 10px; }
   .trow .ch, .trow .sz { visibility: hidden; } }
 @media (max-width: 860px) { .chip.tool { display: none; } }
 
@@ -207,6 +207,14 @@ table.lens tr.off td { color: var(--warn); }
 .chaps span { color: var(--muted); } .chaps b { color: var(--text); font-weight: 500; margin-left: 6px; }
 .chk { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; white-space: nowrap; }
 .chk input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
+.trks { display: grid; gap: 2px; margin-top: 4px; }
+.trk { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+.trk:hover { background: var(--surface-2); }
+.trk input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); flex: none; }
+.trk .tag { margin-left: auto; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; }
+.lnk { font-size: 12px; font-weight: 500; color: var(--accent); margin-left: 8px; text-decoration: none; }
+.pill .sep { opacity: .45; margin: 0 1px; }
+.pill.trkp { padding-left: 9px; padding-right: 9px; gap: 4px; }
 </style>
 </head>
 <body>
@@ -222,6 +230,8 @@ table.lens tr.off td { color: var(--warn); }
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/></symbol>
   <symbol id="i-tv" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/></symbol>
+  <symbol id="i-audio" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7"/></symbol>
+  <symbol id="i-cc" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.5 10.2a2.2 2.2 0 1 0 0 3.6M17 10.2a2.2 2.2 0 1 0 0 3.6"/></symbol>
   <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 8h4M3 16h4M17 8h4M17 16h4"/></symbol>
   <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 17 6-5-6-5M12 19h8"/></symbol>
 </svg>
@@ -308,7 +318,9 @@ let api = null;
 
 const S = {                       // what the user has chosen
   mode: "tv", prefix: "S1E", start: 1, movie: "", movieFolder: false, out: "", minlen: 120,
+  langs: "eng",                   // languages whose audio and subtitles are ticked by default
   checked: new Set(), how: {},    // how[id] = {how: "split"|"whole", eps, pts}
+  tracks: {},                     // tracks[id] = stream numbers to keep (set once the person changes them)
   names: {}, nameErr: "",
 };
 let B = { titles: [], drives: [], play_all: {}, tools: {}, busy: false, scan_id: 0, notices: [] };   // last state from Python
@@ -385,12 +397,104 @@ function firstEp(id) {
 }
 function request() {
   return { mode: S.mode, prefix: S.prefix, start: S.start, movie: S.movie, movie_folder: S.movieFolder, out: S.out,
-    titles: B.titles.filter(t => S.checked.has(t.id)).map(t => ({ id: t.id, ...(S.how[t.id] || {how: "single"}) })) };
+    titles: B.titles.filter(t => S.checked.has(t.id)).map(t => {
+      const r = { id: t.id, ...(S.how[t.id] || {how: "single"}) };
+      if ((t.tracks || []).length) r.tracks = chosenTracks(t);
+      return r;
+    }) };
+}
+
+/* ---------- audio & subtitle tracks ---------- */
+const langList = () => S.langs.toLowerCase().split(/[\s,;]+/).filter(Boolean);
+function trackText(k) {
+  if (k.desc) return k.name && !k.desc.toLowerCase().includes(k.name.toLowerCase()) ? `${k.desc} · ${k.name}` : k.desc;
+  const ch = k.channels ? ({1: "mono", 2: "stereo", 6: "5.1", 8: "7.1"}[k.channels] || `${k.channels} ch`) : "";
+  return [k.lang_name || k.lang || "Unknown language", k.codec_short || k.codec || "", ch, k.name || ""]
+    .filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(" · ");
+}
+function defaultTracks(t) {
+  const L = langList(), tr = t.tracks || [];
+  const mine = k => L.includes((k.lang || "").toLowerCase());
+  const audio = tr.filter(k => k.type === "audio"), subs = tr.filter(k => k.type === "subtitles");
+  const a = audio.filter(mine);
+  return [...(a.length ? a : audio), ...subs.filter(mine)].map(k => k.n);
+}
+const chosenTracks = t => S.tracks[t.id] || defaultTracks(t);
+function trackSummary(t) {
+  const set = new Set(chosenTracks(t)), tr = t.tracks || [];
+  const n = kind => tr.filter(k => k.type === kind && set.has(k.n)).length;
+  const of = kind => tr.filter(k => k.type === kind).length;
+  return { a: n("audio"), aOf: of("audio"), s: n("subtitles"), sOf: of("subtitles"),
+           tip: tr.filter(k => set.has(k.n)).map(k => (k.type === "audio" ? "Audio: " : "Subtitles: ") + trackText(k)).join("\n") || "No audio or subtitles" };
+}
+const trackKey = k => [k.type, k.lang, k.codec_short || k.codec, k.channels || ""].join("|");
+
+function openTracks(id) {
+  const t = byId(id); if (!t) return;
+  const tr = t.tracks || [], cur = new Set(chosenTracks(t));
+  const others = B.titles.filter(x => x.id !== id && S.checked.has(x.id) && (x.tracks || []).length);
+  const list = kind => {
+    const ks = tr.filter(k => k.type === kind);
+    if (!ks.length) return `<div class="hint" style="margin:2px 0 0">None on this title.</div>`;
+    return ks.map(k => `<label class="trk"><input type="checkbox" data-n="${k.n}" ${cur.has(k.n) ? "checked" : ""}>
+      <span>${esc(trackText(k))}</span>${k.flags ? `<span class="tag">${esc(k.flags)}</span>` : ""}</label>`).join("");
+  };
+  const rule = B.track_rule || {};
+  let ruleNote = "";
+  if (rule.copies_all === false && rule.can_set)
+    ruleNote = `<div class="callout" style="margin:12px 0 0">${icon("alert")}<span>MakeMKV is set to copy only some tracks, so a track ticked here can still be left out.
+      <button class="btn sm" id="ruleBtn" style="margin-top:6px">Let MakeMKV copy every track</button></span></div>`;
+  else if (rule.copies_all === null)
+    ruleNote = `<div class="hint" style="margin-top:12px">MakeMKV only copies the tracks its own rule allows. If a ticked track goes missing, open MakeMKV, go to
+      Preferences, turn on <b>Expert mode</b>, and on the <b>Advanced</b> tab set <b>Default selection rule</b> to <code>+sel:all</code>.</div>`;
+  dialog(`
+    <div class="dh"><h3>Audio & subtitles · title ${esc(t.label)}</h3>
+      <p>Tick what to keep. Everything else is left out of the file.</p></div>
+    <div class="content">
+      <div class="sh">Audio <a href="#" class="lnk" data-all="audio">all</a> <a href="#" class="lnk" data-none="audio">none</a></div>
+      <div class="trks" data-kind="audio">${list("audio")}</div>
+      <div class="sh" style="margin-top:14px">Subtitles <a href="#" class="lnk" data-all="subtitles">all</a> <a href="#" class="lnk" data-none="subtitles">none</a></div>
+      <div class="trks" data-kind="subtitles">${list("subtitles")}</div>
+      ${ruleNote}
+      ${others.length ? `<label class="chk" style="margin-top:14px"><input type="checkbox" id="tAll" checked>
+        Same choices for the other ${others.length} selected title${others.length === 1 ? "" : "s"}</label>` : ""}
+    </div>
+    <div class="df"><button class="btn ghost" data-reset>Back to default</button><div class="spacer"></div>
+      <button class="btn ghost" data-x>Cancel</button><button class="btn primary" data-ok>Save</button></div>`,
+  (d, close) => {
+    const boxes = () => [...d.querySelectorAll(".trks input")];
+    d.querySelectorAll("[data-all],[data-none]").forEach(a => a.onclick = e => {
+      e.preventDefault();
+      const kind = a.dataset.all || a.dataset.none;
+      d.querySelectorAll(`.trks[data-kind="${kind}"] input`).forEach(b => b.checked = !!a.dataset.all);
+    });
+    d.querySelector("[data-reset]").onclick = () => {
+      const def = new Set(defaultTracks(t)); boxes().forEach(b => b.checked = def.has(+b.dataset.n));
+    };
+    const rb = d.querySelector("#ruleBtn");
+    if (rb) rb.onclick = () => confirmBox("Let MakeMKV copy every track?",
+      `<p style="margin:0 0 8px">This changes MakeMKV's own <b>Default selection rule</b> to <code>+sel:all</code>, so it copies every audio and subtitle track and MKV Ripper keeps the ones you tick. It also changes what MakeMKV ticks when you use MakeMKV itself.</p>
+       <p style="margin:0">You can put it back any time in MKV Ripper's Settings.</p>`, "Change it", async () => {
+        const r = await api.set_makemkv_copy_all(true);
+        if (r.error) { toast("error", r.error); return; }
+        B.track_rule = r.track_rule; rb.closest(".callout").innerHTML = `${icon("check")}<span>MakeMKV now copies every track.</span>`;
+      });
+    d.querySelector("[data-ok]").onclick = () => {
+      const pick = boxes().filter(b => b.checked).map(b => +b.dataset.n);
+      S.tracks[id] = pick;
+      const all = d.querySelector("#tAll");
+      if (all && all.checked) {
+        const keys = new Set(tr.filter(k => pick.includes(k.n)).map(trackKey));
+        for (const o of others) S.tracks[o.id] = o.tracks.filter(k => keys.has(trackKey(k))).map(k => k.n);
+      }
+      close(); renderTitles();
+    };
+  });
 }
 let saveT = 0;
 function persist() {
   clearTimeout(saveT);
-  saveT = setTimeout(() => api.save_settings({ mode: S.mode, prefix: S.prefix, out: S.out, minlen: S.minlen, movie_folder: S.movieFolder }), 400);
+  saveT = setTimeout(() => api.save_settings({ mode: S.mode, prefix: S.prefix, out: S.out, minlen: S.minlen, movie_folder: S.movieFolder, langs: S.langs }), 400);
 }
 
 /* ---------- rendering ---------- */
@@ -417,7 +521,7 @@ function renderTitles() {
   }
   const n = S.checked.size;
   sub.textContent = `${B.titles.length} title${B.titles.length === 1 ? "" : "s"} · ${n} selected`;
-  let html = `<div class="trow head"><span></span><span>Title</span><span>Length</span><span class="ch">Chapters</span><span class="sz">Size</span><span>Episodes</span><span>Saved as</span></div>`;
+  let html = `<div class="trow head"><span></span><span>Title</span><span>Length</span><span class="ch">Chapters</span><span class="sz">Size</span><span>Episodes</span><span>Audio · Subs</span><span>Saved as</span></div>`;
   let warnT = null;
   for (const t of B.titles) {
     const on = S.checked.has(t.id), pa = isPlayAll(t), h = S.how[t.id], multi = likelyMulti(t);
@@ -431,6 +535,11 @@ function renderTitles() {
     else if (h && h.how === "whole") pill = `<button class="pill accent" data-eps="${t.id}">${icon("file")}${h.eps} episodes · one file</button>`;
     else if (multi) pill = `<button class="pill warn" data-eps="${t.id}">${icon("alert")}Several episodes?</button>`;
     else pill = `<button class="pill" data-eps="${t.id}" title="Split this title into episodes">1 episode</button>`;
+    let trk = `<span class="pill none">—</span>`;
+    if ((t.tracks || []).length) {
+      const m = trackSummary(t), custom = !!S.tracks[t.id];
+      trk = `<button class="pill trkp ${custom ? "accent" : ""}" data-trk="${t.id}" title="${esc(m.tip)}">${icon("audio")}${m.a}/${m.aOf}<span class="sep">·</span>${icon("cc")}${m.s}/${m.sOf}</button>`;
+    }
     const names = S.names[String(t.id)] || [];
     let out = `<span class="out none">${on ? (S.nameErr ? esc(S.nameErr) : "") : "Not ripped"}</span>`;
     if (on && names.length) {
@@ -443,7 +552,7 @@ function renderTitles() {
       <input type="checkbox" ${on ? "checked" : ""} tabindex="-1">
       <span class="num">${esc(t.label)}</span><span class="len">${esc(t.duration || "")}</span>
       <span class="ch">${t.chapters || ""}</span><span class="sz">${esc(t.size || "")}</span>
-      <span>${pill}</span>${out}</div>`;
+      <span>${pill}</span><span>${trk}</span>${out}</div>`;
   }
   box.innerHTML = html;
 
@@ -653,6 +762,11 @@ function openSettings() {
       <div class="setrow"><div class="sh">Scanning</div>
         <div class="row"><span>Hide titles shorter than</span><input class="input num" id="sMin" type="number" min="0" step="30" value="${S.minlen}"><span>seconds</span></div>
         <div class="hint">Lower this if a short episode or extra doesn't show up. Scan again after changing it.</div></div>
+      <div class="setrow"><div class="sh">Audio & subtitles</div>
+        <div class="row"><span>Your languages</span><input class="input" id="sLangs" style="width:160px" spellcheck="false" value="${esc(S.langs)}" placeholder="eng"></div>
+        <div class="hint">Audio and subtitles in these languages are ticked by default. Use three-letter codes, e.g. <code>eng</code>, <code>spa</code>, <code>fre</code>, <code>ger</code>.
+          If none of a title's audio is in your languages, all its audio is kept.</div>
+        ${(B.track_rule || {}).changed ? `<div class="row" style="margin-top:8px"><span>MakeMKV is set to copy every track (changed by MKV Ripper).</span><div class="spacer"></div><button class="btn sm" id="sRule">Put MakeMKV's rule back</button></div>` : ""}</div>
       <div class="setrow"><div class="sh">About</div>
         <div class="row"><span>${B.build ? `MKV Ripper build ${B.build}` : "MKV Ripper (running from source)"}</span><span class="hint" id="sUpd" style="margin:0"></span>
           <div class="spacer"></div><button class="btn sm" id="sCheck">Check for updates</button></div></div>
@@ -667,6 +781,10 @@ function openSettings() {
     d.querySelectorAll("[data-path]").forEach(i => i.onchange = () => api.set_tool(i.dataset.path, i.value));
     d.querySelectorAll("[data-install]").forEach(b => b.onclick = () => { close(); installTool(b.dataset.install); });
     d.querySelector("#sMin").onchange = e => { S.minlen = Math.max(0, parseInt(e.target.value) || 0); persist(); };
+    d.querySelector("#sLangs").onchange = e => { S.langs = e.target.value.trim() || "eng"; persist(); renderTitles(); };
+    const sr = d.querySelector("#sRule");
+    if (sr) sr.onclick = async () => { const r = await api.set_makemkv_copy_all(false);
+      if (r.error) toast("error", r.error); else { B.track_rule = r.track_rule; sr.closest(".row").innerHTML = "<span>MakeMKV's rule is back to what it was.</span>"; } };
     d.querySelector("#sCheck").onclick = async () => {
       const s = d.querySelector("#sUpd"); s.textContent = "Checking…";
       const r = await api.check_update();
@@ -769,6 +887,7 @@ async function poll() {
   for (const n of st.notices || []) if (n.id > seenNotice) { seenNotice = n.id; toast(n.kind, n.text); }
   if (st.scan_id !== seenScan) {          // a new scan: reset the choices
     seenScan = st.scan_id;
+    S.tracks = {};
     S.checked = new Set(); S.how = {};
     const pa = Object.values(st.play_all || {})[0];
     if (pa && S.mode === "tv") pa.forEach(id => S.checked.add(id));
@@ -797,6 +916,8 @@ function wire() {
   $("#tlist").addEventListener("click", e => {
     const pill = e.target.closest("[data-eps]");
     if (pill) { openEpisodes(+pill.dataset.eps); return; }
+    const tp = e.target.closest("[data-trk]");
+    if (tp) { openTracks(+tp.dataset.trk); return; }
     const row = e.target.closest(".trow.t");
     if (!row || B.busy) return;
     const id = +row.dataset.id;
@@ -822,6 +943,7 @@ async function init() {
   const s = st.settings || {};
   S.mode = s.mode || "tv"; S.prefix = s.prefix ?? "S1E"; S.out = s.out || ""; S.minlen = +(s.minlen ?? 120);
   S.movieFolder = !!s.movie_folder; $("#movieFolder").checked = S.movieFolder;
+  S.langs = s.langs || "eng";
   $("#prefix").value = S.prefix; $("#out").value = S.out; $("#start").value = S.start;
   B = st; logFrom = st.log_end || 0;
   wire(); renderAll(); refreshNames();

@@ -37,6 +37,19 @@ jobs:
           python -c "import webview, mkv_ripper; print('pywebview', webview.__version__ if hasattr(webview, '__version__') else '')"
           pyinstaller --noconfirm --clean MKVRipper.spec
 
+      - name: Check reading and changing MakeMKV's track rule
+        shell: python
+        run: |
+          import sys, os
+          sys.path.insert(0, os.getcwd())
+          import mkv_core as c
+          print("rule before:", c.makemkv_rule())
+          old = c.set_makemkv_rule(c.COPY_ALL_RULE)
+          assert c.makemkv_rule() == c.COPY_ALL_RULE and c.rule_copies_all(c.makemkv_rule()), "rule not set"
+          c.set_makemkv_rule(old)
+          assert c.makemkv_rule() == (old or c.MAKEMKV_DEFAULT_RULE), "rule not restored"
+          print("set and restored OK; copies all by default:", c.rule_copies_all(c.makemkv_rule()))
+
       - name: Check the app opens
         shell: pwsh
         run: |
