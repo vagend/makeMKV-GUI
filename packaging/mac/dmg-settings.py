@@ -12,7 +12,7 @@ symlinks = {"Applications": "/Applications"}
 background = defines["background"]      # noqa: F821 - 640x420 pt, with a @2x version inside the .tiff
 
 # window: no toolbar or sidebar, just the picture and the two icons
-window_rect = ((200, 140), (640, 420))
+window_rect = ((200, 140), (640, 448))   # 420 of picture + the title bar
 default_view = "icon-view"
 show_status_bar = False
 show_tab_view = False
