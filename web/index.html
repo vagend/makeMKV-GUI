@@ -238,7 +238,7 @@ table.lens tr.off td { color: var(--warn); }
   <div class="callout err" id="missingBanner" hidden style="margin:0">
     <svg class="i"><use href="#i-alert"/></svg>
     <span>MakeMKV isn't installed. MKV Ripper uses it to read your discs.</span>
-    <button class="btn sm primary" id="installMakeMKV">Install MakeMKV</button>
+    <button class="btn sm primary" id="installMakeMKV">Get MakeMKV</button>
   </div>
 
   <section class="card">
@@ -469,7 +469,7 @@ function renderNaming() {
     $("#nameHint").innerHTML = `Selected titles are numbered top to bottom: <code>${esc(S.prefix)}${s}.mkv</code>, <code>${esc(S.prefix)}${s + 1}.mkv</code>, …  For the next disc, set First episode to continue.`;
   } else {
     const m = S.movie.trim() || "The Matrix (1999)";
-    $("#nameHint").innerHTML = `Saved as <code>${esc(m)}\\${esc(m)}.mkv</code>. Any other selected titles go beside it as Plex extras.`;
+    $("#nameHint").innerHTML = `Saved as <code>${esc(m)}${isMac() ? "/" : "\\"}${esc(m)}.mkv</code>. Any other selected titles go beside it as Plex extras.`;
   }
 }
 
@@ -639,12 +639,12 @@ function openSettings() {
     <div class="setrow"><div class="sh">${esc(pkg)}<span class="chip ${path ? "ok" : key === "makemkv" ? "bad" : "warn"}"><span class="dot"></span>${path ? "Installed" : "Not installed"}</span></div>
       <div class="row"><input class="input grow1 mono" data-path="${key}" value="${esc(path)}" spellcheck="false" placeholder="Not found">
         <button class="btn sm" data-browse="${key}">Browse…</button>
-        <button class="btn sm" data-install="${esc(pkg)}">${path ? "Update" : "Install"}</button></div>
+        <button class="btn sm" data-install="${esc(pkg)}">${howInstall(pkg) === "page" ? "Download page" : path ? "Update" : "Install"}</button></div>
       <div class="hint">${what}</div></div>`;
   dialog(`
     <div class="dh"><h3>Settings</h3></div>
     <div class="content">
-      ${row("makemkv", "MakeMKV", tools.makemkv || "", "Reads your discs. Installed and updated with Windows Package Manager (winget).")}
+      ${row("makemkv", "MakeMKV", tools.makemkv || "", isMac() ? "Reads your discs. On a Mac it comes from makemkv.com: the button opens its download page, for installing or updating." : "Reads your discs. Installed and updated with Windows Package Manager (winget).")}
       ${row("mkvmerge", "MKVToolNix", tools.mkvmerge || "", "Only needed to split a title into separate episodes.")}
       <div class="setrow"><div class="sh">Scanning</div>
         <div class="row"><span>Hide titles shorter than</span><input class="input num" id="sMin" type="number" min="0" step="30" value="${S.minlen}"><span>seconds</span></div>
@@ -676,9 +676,21 @@ function openSettings() {
   });
 }
 
+const isMac = () => B.platform === "mac";
+const howInstall = pkg => ((B.tools || {}).installer || {})[pkg] || "winget";
 function installTool(pkg) {
   const lic = pkg === "MakeMKV" ? "<p>MakeMKV has its own license and beta key; installing it means you accept its terms.</p>" : "";
-  confirmBox(`Install or update ${pkg}?`, `<p style="margin:0 0 8px">MKV Ripper will use Windows Package Manager (winget) to get the latest ${esc(pkg)}. Windows may ask for permission.</p>${lic}`,
+  const how = howInstall(pkg);
+  if (how === "page") {
+    const steps = pkg === "MakeMKV"
+      ? "Download the Mac version, open the .dmg, and drag MakeMKV into Applications."
+      : "Download the Mac .dmg, open it, and drag MKVToolNix into Applications.";
+    return confirmBox(`Get ${pkg}`, `<p style="margin:0 0 8px">${pkg}'s download page will open in your browser. ${steps} MKV Ripper finds it by itself once it's there.</p>${lic}`,
+      "Open download page", async () => { await api.install_tool(pkg); poll(); });
+  }
+  const tool = how === "brew" ? "Homebrew" : "Windows Package Manager (winget)";
+  const ask = how === "brew" ? "" : " Windows may ask for permission.";
+  confirmBox(`Install or update ${pkg}?`, `<p style="margin:0 0 8px">MKV Ripper will use ${tool} to get the latest ${esc(pkg)}.${ask}</p>${lic}`,
     "Continue", async () => { await api.install_tool(pkg); poll(); });
 }
 

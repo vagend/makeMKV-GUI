@@ -1,6 +1,7 @@
-# Builds MKVRipper.exe every time you push to main and puts it on the repo's Releases page
-# as the latest release. The app checks that release's build number to update itself.
-name: Build MKVRipper.exe
+# Builds MKV Ripper for Windows (MKVRipper.exe + installer) and Mac (Apple Silicon and Intel) every time
+# you push to main and puts them on the repo's Releases page as the latest release.
+# The app checks that release's build number to update itself.
+name: Build MKV Ripper
 
 on:
   push:
@@ -84,14 +85,72 @@ jobs:
           if-no-files-found: error
           retention-days: 3   # only needed until the release step
 
+  mac:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15          # Apple Silicon (M1 and later)
+            arch: AppleSilicon
+          - runner: macos-15-intel    # Intel Macs
+            arch: Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp build number
+        run: echo "${{ github.run_number }}" > APP_BUILD
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the app
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-build.txt
+          pyinstaller --noconfirm --clean MKVRipper.spec
+          APP="dist/MKV Ripper.app"
+          # ad-hoc signature: without one, macOS 15.1+ won't offer "Open Anyway" for a downloaded app
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          file "$APP/Contents/MacOS/MKVRipper"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist"
+
+      - name: Check the app opens
+        run: |
+          export MKVRIPPER_SMOKE="$PWD/smoke.txt"
+          "dist/MKV Ripper.app/Contents/MacOS/MKVRipper" &
+          pid=$!
+          for i in $(seq 1 90); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          if kill -0 $pid 2>/dev/null; then kill $pid; echo "app didn't finish loading within 90 s"; exit 1; fi
+          test -f smoke.txt || { echo "app closed without loading its page"; exit 1; }
+          r=$(cat smoke.txt); echo "Page check: $r"
+          echo "$r" | grep -q "MKV Ripper / api:object" || { echo "page or Python bridge didn't load"; exit 1; }
+          echo "$r" | grep -Eq "https:truststore[._a-z]* / latest:[0-9]+" || { echo "update check over HTTPS failed"; exit 1; }
+
+      - name: Zip the app
+        run: |
+          # ditto keeps the app's permissions, links and signature intact
+          ditto -c -k --keepParent "dist/MKV Ripper.app" "dist/MKVRipper-mac-${{ matrix.arch }}.zip"
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MKVRipper-mac-${{ matrix.arch }}
+          path: dist/MKVRipper-mac-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 3
+
   release:
-    needs: build
+    needs: [build, mac]
     if: github.ref == 'refs/heads/main'   # test branches build but don't publish
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: MKVRipper
+          pattern: MKVRipper*
+          merge-multiple: true
           path: out
 
       - name: Publish "Latest build"
@@ -100,15 +159,21 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
+          ls -la out
           gh release create latest out/MKVRipper-setup.exe out/MKVRipper.exe \
+            out/MKVRipper-mac-AppleSilicon.zip out/MKVRipper-mac-Intel.zip \
             --target "$GITHUB_SHA" \
             --title "MKV Ripper (build ${{ github.run_number }})" \
             --latest \
             --notes "Built from ${GITHUB_SHA::7} on $(date -u '+%Y-%m-%d %H:%M') UTC.
 
-          **Install:** download **MKVRipper-setup.exe** and run it. It installs just for you (no admin needed), adds MKV Ripper to the Start menu, and can be uninstalled from Settings > Apps.
+          **Windows:** download **MKVRipper-setup.exe** and run it. It installs just for you (no admin needed), adds MKV Ripper to the Start menu, and can be uninstalled from Settings > Apps.
           (MKVRipper.exe on its own also runs without installing; it's also what the app downloads to update itself.)
 
           If MakeMKV or MKVToolNix is missing, the app offers to install it.
 
-          Windows SmartScreen may warn that the app isn't from a known publisher: click **More info > Run anyway**."
+          Windows SmartScreen may warn that the app isn't from a known publisher: click **More info > Run anyway**.
+
+          **Mac:** download **MKVRipper-mac-AppleSilicon.zip** for an M1/M2/M3/M4 Mac, or **MKVRipper-mac-Intel.zip** for an Intel Mac (Apple menu > About This Mac shows which). Open the zip and drag **MKV Ripper** into Applications.
+          The first time, macOS says it can't verify the app: click **Done**, open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**. After that it opens normally and updates itself.
+          Install MakeMKV from makemkv.com; the app offers MKVToolNix through Homebrew if you have it, or its download page."

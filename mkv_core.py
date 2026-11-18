@@ -15,7 +15,11 @@ import tempfile
 import urllib.error
 import urllib.request
 
+IS_MAC = sys.platform == "darwin"
+
 DEFAULT_MAKEMKVCON = [
+    "/Applications/MakeMKV.app/Contents/MacOS/makemkvcon",
+    os.path.expanduser("~/Applications/MakeMKV.app/Contents/MacOS/makemkvcon"),
     r"C:\Program Files (x86)\MakeMKV\makemkvcon64.exe",
     r"C:\Program Files (x86)\MakeMKV\makemkvcon.exe",
     r"C:\Program Files\MakeMKV\makemkvcon64.exe",
@@ -51,11 +55,37 @@ def find_makemkvcon():
     return found or ""
 
 
+def _mac_mkvmerge():
+    """MKVToolNix.app (Homebrew's mkvtoolnix-app) or a versioned MKVToolNix-NN.app from the DMG, newest first.
+    Apps opened from Finder don't get Homebrew's folders on PATH, so look there too."""
+    import glob
+    hits = []
+    for apps in ("/Applications", os.path.expanduser("~/Applications")):
+        hits += glob.glob(os.path.join(apps, "MKVToolNix*.app", "Contents", "MacOS", "mkvmerge"))
+    nums = lambda p: [int(n) for n in re.findall(r"\d+", os.path.basename(p.split("/Contents/")[0]))] or [10 ** 6]
+    hits.sort(key=nums, reverse=True)
+    hits += [p for p in ("/opt/homebrew/bin/mkvmerge", "/usr/local/bin/mkvmerge") if os.path.isfile(p)]
+    return hits[0] if hits else ""
+
+
 def find_mkvmerge():
     for p in DEFAULT_MKVMERGE:
         if os.path.isfile(p):
             return p
+    if IS_MAC:
+        p = _mac_mkvmerge()
+        if p:
+            return p
     return shutil.which("mkvmerge") or ""
+
+
+def tool_in_app(path, kind):
+    """On a Mac people pick MakeMKV.app or MKVToolNix.app; use the command-line tool inside it."""
+    if path.endswith(".app") and os.path.isdir(path):
+        inner = os.path.join(path, "Contents", "MacOS", "makemkvcon" if kind == "makemkv" else "mkvmerge")
+        if os.path.isfile(inner):
+            return inner
+    return path
 
 
 # ----------------------------------------------------------------------------
@@ -111,6 +141,43 @@ def _urlopen(req, timeout):
         except ImportError:
             raise e from None
 WINGET_IDS = {"MakeMKV": "GuinpinSoft.MakeMKV", "MKVToolNix": "MoritzBunkus.MKVToolNix"}
+# Mac: Homebrew can install MKVToolNix; it dropped MakeMKV (it failed Apple's Gatekeeper check), so MakeMKV
+# comes from its website.
+BREW_CASKS = {"MKVToolNix": "mkvtoolnix-app"}
+TOOL_PAGES = {"MakeMKV": "https://www.makemkv.com/download/",
+              "MKVToolNix": "https://mkvtoolnix.download/downloads.html#macosx"}
+
+
+def find_brew():
+    for p in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+        if os.path.isfile(p):
+            return p
+    return shutil.which("brew") or ""
+
+
+def installer_for(package):
+    """'winget', 'brew', or 'page' (open the download page) for this computer."""
+    if IS_MAC:
+        return "brew" if package in BREW_CASKS and find_brew() else "page"
+    return "winget"
+
+
+def brew_run(action, package, on_line=None):
+    """Install or upgrade a Homebrew cask. Returns (exit code, last lines of output)."""
+    args = [find_brew(), "upgrade" if action == "upgrade" else "install", "--cask", BREW_CASKS[package]]
+    env = dict(os.environ, HOMEBREW_NO_AUTO_UPDATE="1", NONINTERACTIVE="1",
+               PATH="/opt/homebrew/bin:/usr/local/bin:" + os.environ.get("PATH", ""))
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+                            errors="replace")
+    tail = []
+    for line in proc.stdout:
+        line = line.strip()
+        if line:
+            tail = (tail + [line])[-6:]
+            if on_line:
+                on_line(line)
+    proc.wait()
+    return proc.returncode, tail
 
 
 def find_winget():
@@ -147,15 +214,23 @@ def parse_build(title):
     return int(m.group(1)) if m else 0
 
 
+def update_asset():
+    """The release file this copy of the app updates from."""
+    if IS_MAC:
+        import platform
+        return "MKVRipper-mac-AppleSilicon.zip" if platform.machine() == "arm64" else "MKVRipper-mac-Intel.zip"
+    return EXE_ASSET
+
+
 def latest_release():
-    """Return (build number, download URL of MKVRipper.exe or None) from GitHub's latest release."""
+    """Return (build number, download URL of this platform's file or None) from GitHub's latest release."""
     req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
                                  headers={"Accept": "application/vnd.github+json",
                                           "User-Agent": "MKVRipper"})
     with _urlopen(req, timeout=15) as r:
         data = json.load(r)
     url = next((a["browser_download_url"] for a in data.get("assets", [])
-                if a.get("name", "").lower() == EXE_ASSET.lower()), None)
+                if a.get("name", "").lower() == update_asset().lower()), None)
     return parse_build(data.get("name", "")), url
 
 
@@ -163,12 +238,23 @@ def is_frozen():
     return bool(getattr(sys, "frozen", False))
 
 
+def app_bundle():
+    """Mac: the 'MKV Ripper.app' folder this copy runs from ('' if not in a bundle)."""
+    p = os.path.dirname(os.path.dirname(os.path.dirname(sys.executable)))   # X.app/Contents/MacOS/exe
+    return p if p.endswith(".app") else ""
+
+
 def cleanup_old_exe():
-    if is_frozen():
-        try:
+    if not is_frozen():
+        return
+    try:
+        if IS_MAC:
+            if app_bundle() and os.path.isdir(app_bundle() + ".old"):
+                shutil.rmtree(app_bundle() + ".old", ignore_errors=True)
+        else:
             os.remove(sys.executable + ".old")
-        except OSError:
-            pass
+    except OSError:
+        pass
 
 
 def refresh_icons():
@@ -188,8 +274,41 @@ def refresh_icons():
         pass
 
 
+def _install_mac_update(url):
+    """Download the zipped .app, swap it in for the running bundle, and open the new one."""
+    bundle = app_bundle()
+    if not bundle:
+        raise RuntimeError("MKV Ripper isn't running from an app bundle")
+    tmp = tempfile.mkdtemp(prefix="mkvripper-update-")
+    try:
+        z = os.path.join(tmp, "update.zip")
+        req = urllib.request.Request(url, headers={"User-Agent": "MKVRipper"})
+        with _urlopen(req, timeout=300) as r, open(z, "wb") as f:
+            shutil.copyfileobj(r, f)
+        if os.path.getsize(z) < 1_000_000:
+            raise RuntimeError("The downloaded update looks incomplete; nothing was changed.")
+        out = os.path.join(tmp, "x")
+        subprocess.run(["/usr/bin/ditto", "-x", "-k", z, out], check=True)
+        new = next((os.path.join(out, n) for n in os.listdir(out) if n.endswith(".app")), "")
+        if not new:
+            raise RuntimeError("The update didn't contain the app; nothing was changed.")
+        old = bundle + ".old"
+        shutil.rmtree(old, ignore_errors=True)
+        os.rename(bundle, old)                    # macOS lets a running app's folder be moved
+        try:
+            shutil.move(new, bundle)
+        except Exception:
+            os.rename(old, bundle)                # put the working copy back
+            raise
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    subprocess.Popen(["/usr/bin/open", "-n", bundle])
+
+
 def install_update(url):
-    """Download the new exe, swap it in for the running one, and start it."""
+    """Download the new version, swap it in for the running one, and start it."""
+    if IS_MAC:
+        return _install_mac_update(url)
     exe = sys.executable
     new, old = exe + ".new", exe + ".old"
     req = urllib.request.Request(url, headers={"User-Agent": "MKVRipper"})
@@ -378,8 +497,9 @@ def _dvd_time(b):
     return _bcd(b[0]) * 3600 + _bcd(b[1]) * 60 + _bcd(b[2]) + _bcd(b[3] & 0x3F) / fps
 
 
-def dvd_root(device=""):
-    """Folder holding VIDEO_TS for the drive MakeMKV reported (e.g. 'D:'), or the only DVD found."""
+def dvd_root(device="", label=""):
+    """Folder holding VIDEO_TS for the drive MakeMKV reported (e.g. 'D:'), or the only DVD found.
+    On a Mac discs mount under /Volumes, named after the disc (MakeMKV's disc name)."""
     cands = []
     if device and not device.startswith("/dev/"):
         cands.append(device if device.endswith(("\\", "/")) else device + os.sep)
@@ -388,6 +508,14 @@ def dvd_root(device=""):
     if sys.platform == "win32":
         found = [f"{c}:\\" for c in "DEFGHIJKLMNOPQRSTUVWXYZ"
                  if os.path.isfile(f"{c}:\\VIDEO_TS\\VIDEO_TS.IFO")]
+        if len(found) == 1:
+            return found[0]
+    if IS_MAC and os.path.isdir("/Volumes"):
+        found = [os.path.join("/Volumes", v) for v in sorted(os.listdir("/Volumes"))
+                 if os.path.isfile(os.path.join("/Volumes", v, "VIDEO_TS", "VIDEO_TS.IFO"))]
+        named = [f for f in found if label and os.path.basename(f).lower() == label.lower()]
+        if named:
+            return named[0]
         if len(found) == 1:
             return found[0]
     return ""
@@ -605,7 +733,9 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
 
 CHECK_ON, CHECK_OFF = "\u2611", "\u2610"
 
-SETTINGS_FILE = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "MKVRipper", "settings.json")
+SETTINGS_FILE = os.path.join(
+    os.path.expanduser("~/Library/Application Support") if IS_MAC else (os.environ.get("APPDATA") or os.path.expanduser("~")),
+    "MKVRipper", "settings.json")
 
 
 def load_settings():

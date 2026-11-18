@@ -6,8 +6,8 @@ Windows' built-in WebView2 (the Edge engine). The page calls the Api class below
 that touches the disc, files, or the internet; the disc/rip/split/update logic is in mkv_core.py.
 
 Run from source:  pip install pywebview  then  python mkv_ripper.py
-The released MKVRipper.exe needs no Python. MakeMKV and MKVToolNix are installed/updated through
-winget from Settings, and the app updates itself from GitHub Releases.
+The released app (MKVRipper.exe, or "MKV Ripper.app" on a Mac) needs no Python. The tools are installed/updated through
+winget (Windows) or Homebrew/download pages (Mac) from Settings, and the app updates itself from GitHub Releases.
 """
 
 import os
@@ -36,6 +36,7 @@ class Api:
         self._notice_id = 0
         self._s = {
             "build": core.APP_BUILD,
+            "platform": "mac" if core.IS_MAC else "windows",
             "frozen": core.is_frozen(),
             "drives": [],
             "titles": [],
@@ -71,10 +72,16 @@ class Api:
             self._s["notices"] = (self._s["notices"] + [{"id": self._notice_id, "kind": kind, "text": text}])[-20:]
 
     def _tools(self):
+        # look again whenever a tool is missing, so one installed outside the app is picked up
+        if not (self._makemkv and os.path.isfile(self._makemkv)):
+            self._makemkv = core.find_makemkvcon()
+        if not (self._mkvmerge and os.path.isfile(self._mkvmerge)):
+            self._mkvmerge = core.find_mkvmerge()
         return {
-            "makemkv": self._makemkv if self._makemkv and os.path.isfile(self._makemkv) else "",
-            "mkvmerge": self._mkvmerge if self._mkvmerge and os.path.isfile(self._mkvmerge) else "",
-            "winget": bool(core.find_winget()),
+            "makemkv": self._makemkv or "",
+            "mkvmerge": self._mkvmerge or "",
+            "winget": False if core.IS_MAC else bool(core.find_winget()),
+            "installer": {"MakeMKV": core.installer_for("MakeMKV"), "MKVToolNix": core.installer_for("MKVToolNix")},
         }
 
     def _run(self, task, fn):
@@ -168,7 +175,7 @@ class Api:
                     t["chapters"] = 0
             play_all = {str(k): v for k, v in core.find_play_all(titles).items()}
             drive = next((d for d in self._s["drives"] if d["index"] == disc), {})
-            root = core.dvd_root(drive.get("path", ""))
+            root = core.dvd_root(drive.get("path", ""), drive.get("disc", ""))
             got = 0
             for t in titles:
                 if root and t.get("dvd"):
@@ -328,13 +335,13 @@ class Api:
         return self._dialog("folder", start)
 
     def browse_tool(self, kind):
-        path = self._dialog("exe", os.path.dirname(self._makemkv if kind == "makemkv" else self._mkvmerge or ""))
+        path = self._dialog("exe", os.path.dirname((self._makemkv if kind == "makemkv" else self._mkvmerge) or ""))
         if path:
             self.set_tool(kind, path)
         return path
 
     def set_tool(self, kind, path):
-        path = (path or "").strip()
+        path = core.tool_in_app((path or "").strip().rstrip("/"), kind)
         if kind == "makemkv":
             self._makemkv = path
         else:
@@ -351,8 +358,9 @@ class Api:
                 res = self._window.create_file_dialog(typ, directory=start or "")
             else:
                 typ = dlg.OPEN if dlg else webview.OPEN_DIALOG
-                res = self._window.create_file_dialog(typ, directory=start or "",
-                                                      file_types=("Programs (*.exe)", "All files (*.*)"))
+                types = () if core.IS_MAC else ("Programs (*.exe)", "All files (*.*)")
+                res = self._window.create_file_dialog(typ, directory=start or ("/Applications" if core.IS_MAC else ""),
+                                                      file_types=types)
         except Exception as e:  # noqa: BLE001
             self._logline(f"File dialog failed: {e}")
             return ""
@@ -361,15 +369,26 @@ class Api:
         return str(res[0] if isinstance(res, (list, tuple)) else res)
 
     def install_tool(self, package):
+        how = core.installer_for(package)
+        if how == "page":
+            import webbrowser
+            webbrowser.open(core.TOOL_PAGES[package])
+            self._notice("info", f"The {package} download page opened in your browser. Install it, then come back: "
+                                 "MKV Ripper finds it by itself.")
+            return True
         tools = self._tools()
         installed = bool(tools["makemkv"] if package == "MakeMKV" else tools["mkvmerge"])
         action = "upgrade" if installed else "install"
 
         def work():
-            self._set(status=f"{'Updating' if installed else 'Installing'} {package} with winget "
+            self._set(status=f"{'Updating' if installed else 'Installing'} {package} with {how} "
                              f"(this can take a few minutes)...")
-            self._logline(f"--- winget {action} {core.WINGET_IDS[package]}")
-            code, tail = core.winget_run(action, package, self._logline)
+            if how == "brew":
+                self._logline(f"--- brew {action} --cask {core.BREW_CASKS[package]}")
+                code, tail = core.brew_run(action, package, self._logline)
+            else:
+                self._logline(f"--- winget {action} {core.WINGET_IDS[package]}")
+                code, tail = core.winget_run(action, package, self._logline)
             if package == "MakeMKV" and not self._tools()["makemkv"]:
                 self._makemkv = core.find_makemkvcon()
             if package == "MKVToolNix" and not self._tools()["mkvmerge"]:
@@ -379,7 +398,7 @@ class Api:
             if now and (code == 0 or installed):
                 self._notice("info", f"{package}: {last or 'done'}")
             else:
-                self._notice("error", f"{package} wasn't installed. {last or f'winget exit code {code}'}")
+                self._notice("error", f"{package} wasn't installed. {last or f'{how} exit code {code}'}")
             self._set(status="Ready")
             if package == "MakeMKV" and now and not self._s["drives"]:
                 threading.Timer(0.5, self.refresh_drives).start()
@@ -409,8 +428,10 @@ class Api:
                 core.install_update(url)
             except Exception as e:  # noqa: BLE001
                 self._logline(f"Update download failed: {e}")
+                what = (f"download {core.update_asset()} and drag MKV Ripper into Applications" if core.IS_MAC
+                        else "run MKVRipper-setup.exe from there")
                 self._notice("error", f"Couldn't download the update ({e}). The download page is opening in "
-                                      "your browser: run MKVRipper-setup.exe from there.")
+                                      f"your browser: {what}.")
                 self.open_releases()
                 self._set(status="Ready")
                 return
@@ -427,8 +448,12 @@ class Api:
 
     def open_folder(self, path):
         try:
-            os.startfile(path)  # noqa: S606 - opens Explorer on the user's own folder
-        except (AttributeError, OSError) as e:
+            if core.IS_MAC:
+                import subprocess
+                subprocess.run(["/usr/bin/open", path], check=True)
+            else:
+                os.startfile(path)  # noqa: S606 - opens Explorer on the user's own folder
+        except (AttributeError, OSError, Exception) as e:  # noqa: BLE001
             self._notice("error", f"Couldn't open the folder: {e}")
 
 
