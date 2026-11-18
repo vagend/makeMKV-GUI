@@ -210,7 +210,7 @@ class Api:
             bad = core.check_prefix(movie)
             if bad:
                 raise ValueError(f"The movie name can't contain {bad}")
-            names = core.build_movie_names(movie, len(rows))
+            names = core.build_movie_names(movie, len(rows), folder=req.get("movie_folder", True))
             return [(r["id"], [n], [], None) for r, n in zip(rows, names)]
         prefix = req.get("prefix") or ""
         bad = core.check_prefix(prefix)

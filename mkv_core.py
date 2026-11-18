@@ -685,9 +685,13 @@ def build_multi_name(prefix, first, last, ext=".mkv"):
     return f"{prefix}{first}-E{pad}{last}{ext}"
 
 
-def build_movie_names(movie, count, ext=".mkv"):
-    """First checked title is the movie; any others become Plex 'other' extras.
-    Paths are relative to the output folder: '<movie>/<movie>.mkv', '<movie>/Extra 1-other.mkv', ..."""
+def build_movie_names(movie, count, ext=".mkv", folder=True):
+    """First checked title is the movie; any others are extras. Paths are relative to the output folder.
+    folder=True:  '<movie>/<movie>.mkv', '<movie>/Extra 1-other.mkv', ...
+    folder=False: '<movie>.mkv', '<movie> - Extra 1-other.mkv', ... straight in the output folder."""
+    if not folder:
+        names = [f"{movie}{ext}"] if count else []
+        return names + [f"{movie} - Extra {i}-other{ext}" for i in range(1, count)]
     names = [os.path.join(movie, f"{movie}{ext}")] if count else []
     names += [os.path.join(movie, f"Extra {i}-other{ext}") for i in range(1, count)]
     return names

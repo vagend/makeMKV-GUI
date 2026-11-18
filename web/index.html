@@ -205,6 +205,8 @@ table.lens tr.off td { color: var(--warn); }
 .lenline { font-size: 11px; color: var(--muted); margin-top: 3px; white-space: nowrap; }
 .chaps { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 4px 12px; font-size: 12px; margin-top: 6px; }
 .chaps span { color: var(--muted); } .chaps b { color: var(--text); font-weight: 500; margin-left: 6px; }
+.chk { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.chk input { width: 15px; height: 15px; margin: 0; accent-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -275,7 +277,7 @@ table.lens tr.off td { color: var(--warn); }
       <input class="input" id="prefix" spellcheck="false" placeholder="Show (Year) - S01E">
       <input class="input" id="movie" spellcheck="false" placeholder="The Matrix (1999)" hidden>
       <span class="epwrap" id="tvFields">First episode<input class="input num" id="start" type="number" min="0" value="1"></span>
-      <span id="movieFields" hidden></span>
+      <span id="movieFields" hidden><label class="chk"><input type="checkbox" id="movieFolder"> Put the movie in its own folder</label></span>
       <div class="hint" id="nameHint"></div>
       <span class="lbl">Save to</span>
       <input class="input" id="out" spellcheck="false" placeholder="Choose the folder the files go in">
@@ -305,7 +307,7 @@ const icon = (n, st = "") => `<svg class="i" ${st ? `style="${st}"` : ""}><use h
 let api = null;
 
 const S = {                       // what the user has chosen
-  mode: "tv", prefix: "S1E", start: 1, movie: "", out: "", minlen: 120,
+  mode: "tv", prefix: "S1E", start: 1, movie: "", movieFolder: false, out: "", minlen: 120,
   checked: new Set(), how: {},    // how[id] = {how: "split"|"whole", eps, pts}
   names: {}, nameErr: "",
 };
@@ -382,13 +384,13 @@ function firstEp(id) {
   return ep;
 }
 function request() {
-  return { mode: S.mode, prefix: S.prefix, start: S.start, movie: S.movie, out: S.out,
+  return { mode: S.mode, prefix: S.prefix, start: S.start, movie: S.movie, movie_folder: S.movieFolder, out: S.out,
     titles: B.titles.filter(t => S.checked.has(t.id)).map(t => ({ id: t.id, ...(S.how[t.id] || {how: "single"}) })) };
 }
 let saveT = 0;
 function persist() {
   clearTimeout(saveT);
-  saveT = setTimeout(() => api.save_settings({ mode: S.mode, prefix: S.prefix, out: S.out, minlen: S.minlen }), 400);
+  saveT = setTimeout(() => api.save_settings({ mode: S.mode, prefix: S.prefix, out: S.out, minlen: S.minlen, movie_folder: S.movieFolder }), 400);
 }
 
 /* ---------- rendering ---------- */
@@ -469,7 +471,9 @@ function renderNaming() {
     $("#nameHint").innerHTML = `Selected titles are numbered top to bottom: <code>${esc(S.prefix)}${s}.mkv</code>, <code>${esc(S.prefix)}${s + 1}.mkv</code>, …  For the next disc, set First episode to continue.`;
   } else {
     const m = S.movie.trim() || "The Matrix (1999)";
-    $("#nameHint").innerHTML = `Saved as <code>${esc(m)}${isMac() ? "/" : "\\"}${esc(m)}.mkv</code>. Any other selected titles go beside it as Plex extras.`;
+    $("#nameHint").innerHTML = S.movieFolder
+      ? `Saved as <code>${esc(m)}${isMac() ? "/" : "\\"}${esc(m)}.mkv</code>. Any other selected titles go in the same folder as extras.`
+      : `Saved as <code>${esc(m)}.mkv</code> straight in the folder below, no subfolder. Other selected titles are saved beside it as extras.`;
   }
 }
 
@@ -805,6 +809,7 @@ function wire() {
   $("#prefix").oninput = e => { S.prefix = e.target.value; persist(); renderNaming(); refreshNames(); };
   $("#start").oninput = e => { S.start = e.target.value; renderNaming(); refreshNames(); };
   $("#movie").oninput = e => { S.movie = e.target.value; renderNaming(); refreshNames(); };
+  $("#movieFolder").onchange = e => { S.movieFolder = e.target.checked; persist(); renderNaming(); refreshNames(); };
   $("#out").oninput = e => { S.out = e.target.value; persist(); };
   $("#browseOut").onclick = async () => { const p = await api.choose_folder(S.out); if (p) { S.out = p; $("#out").value = p; persist(); } };
   $("#ripBtn").onclick = () => startRip(false);
@@ -816,6 +821,7 @@ async function init() {
   const st = await api.startup();
   const s = st.settings || {};
   S.mode = s.mode || "tv"; S.prefix = s.prefix ?? "S1E"; S.out = s.out || ""; S.minlen = +(s.minlen ?? 120);
+  S.movieFolder = !!s.movie_folder; $("#movieFolder").checked = S.movieFolder;
   $("#prefix").value = S.prefix; $("#out").value = S.out; $("#start").value = S.start;
   B = st; logFrom = st.log_end || 0;
   wire(); renderAll(); refreshNames();
