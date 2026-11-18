@@ -46,7 +46,7 @@ jobs:
           $r = Get-Content smoke.txt
           "Page check: $r"
           if ($r -notmatch "MKV Ripper / api:object") { throw "page or Python bridge didn't load: $r" }
-          if ($r -notmatch "https:truststore / latest:\d+") { throw "update check over HTTPS failed: $r" }
+          if ($r -notmatch "https:truststore[._a-z]* / latest:\d+") { throw "update check over HTTPS failed: $r" }
 
       - name: Build installer
         shell: pwsh
