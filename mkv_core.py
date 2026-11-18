@@ -223,10 +223,22 @@ def update_asset():
 
 
 def latest_release():
-    """Return (build number, download URL of this platform's file or None) from GitHub's latest release."""
+    """Return (build number, download URL of this platform's file or None) for GitHub's latest release.
+    Reads BUILD.txt from the release's normal download link, which isn't rate limited; GitHub's API
+    allows only 60 requests an hour per address, so it's only the fallback."""
+    base = f"https://github.com/{GITHUB_REPO}/releases/latest/download/"
+    try:
+        req = urllib.request.Request(base + "BUILD.txt", headers={"User-Agent": "MKVRipper"})
+        with _urlopen(req, timeout=15) as r:
+            build = int(r.read(64).decode("ascii", "replace").strip())
+        return build, base + update_asset()
+    except urllib.error.HTTPError as e:
+        if e.code != 404:                      # 404: an older release without BUILD.txt
+            raise
+    except ValueError:
+        pass
     req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-                                 headers={"Accept": "application/vnd.github+json",
-                                          "User-Agent": "MKVRipper"})
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "MKVRipper"})
     with _urlopen(req, timeout=15) as r:
         data = json.load(r)
     url = next((a["browser_download_url"] for a in data.get("assets", [])

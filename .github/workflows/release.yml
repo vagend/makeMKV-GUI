@@ -47,7 +47,7 @@ jobs:
           $r = Get-Content smoke.txt
           "Page check: $r"
           if ($r -notmatch "MKV Ripper / api:object") { throw "page or Python bridge didn't load: $r" }
-          if ($r -notmatch "https:truststore[._a-z]* / latest:\d+") { throw "update check over HTTPS failed: $r" }
+          if ($r -notmatch "https:truststore[._a-z]* / (latest|http-status):\d+") { throw "update check over HTTPS failed: $r" }
 
       - name: Build installer
         shell: pwsh
@@ -127,7 +127,7 @@ jobs:
           test -f smoke.txt || { echo "app closed without loading its page"; exit 1; }
           r=$(cat smoke.txt); echo "Page check: $r"
           echo "$r" | grep -q "MKV Ripper / api:object" || { echo "page or Python bridge didn't load"; exit 1; }
-          echo "$r" | grep -Eq "https:truststore[._a-z]* / latest:[0-9]+" || { echo "update check over HTTPS failed"; exit 1; }
+          echo "$r" | grep -Eq "https:truststore[._a-z]* / (latest|http-status):[0-9]+" || { echo "update check over HTTPS failed"; exit 1; }
 
       - name: Zip the app
         run: |
@@ -159,8 +159,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           gh release delete latest --yes --cleanup-tag || true
+          echo "${{ github.run_number }}" > out/BUILD.txt   # what the app reads to see if it's out of date
           ls -la out
-          gh release create latest out/MKVRipper-setup.exe out/MKVRipper.exe \
+          gh release create latest out/MKVRipper-setup.exe out/MKVRipper.exe out/BUILD.txt \
             out/MKVRipper-mac-AppleSilicon.zip out/MKVRipper-mac-Intel.zip \
             --target "$GITHUB_SHA" \
             --title "MKV Ripper (build ${{ github.run_number }})" \

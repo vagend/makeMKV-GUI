@@ -505,8 +505,13 @@ def main():
         def check():
             time.sleep(2)
             result = window.evaluate_js("document.title + ' / api:' + typeof (window.pywebview && window.pywebview.api)")
-            try:   # the update check must work from the frozen exe, using Windows' certificate check
-                result = f"{result} / https:{type(core._ssl_context()).__module__} / latest:{core.latest_release()[0]}"
+            # the update check must work from the built app: HTTPS through the system's certificate check.
+            # An HTTP error status still proves the secure connection worked (GitHub may rate-limit CI).
+            result = f"{result} / https:{type(core._ssl_context()).__module__}"
+            try:
+                result = f"{result} / latest:{core.latest_release()[0]}"
+            except core.urllib.error.HTTPError as e:
+                result = f"{result} / http-status:{e.code}"
             except Exception as e:  # noqa: BLE001
                 result = f"{result} / https-error:{e}"
             with open(smoke, "w", encoding="utf-8") as f:
