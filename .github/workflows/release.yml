@@ -6,7 +6,7 @@ name: Build MKV Ripper
 on:
   push:
     branches: [main]
-    paths-ignore: ["**.md", ".gitignore"]
+    paths-ignore: ["**.md", ".gitignore", "LICENSE", "docs/**"]
   workflow_dispatch:   # lets you start a build from the Actions tab
 
 permissions:
