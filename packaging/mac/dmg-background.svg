@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420">
+  <!-- Background of the .dmg window. Icons sit at (160,200) and (480,200), 128 pt; Finder draws their names below. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/><stop offset="1" stop-color="#e8edf4"/>
+    </linearGradient>
+    <marker id="head" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+  </defs>
+  <rect width="640" height="420" fill="url(#bg)"/>
+  <g font-family="Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif" text-anchor="middle">
+    <text x="320" y="56" font-size="22" font-weight="700" fill="#0f172a">Install MKV Ripper</text>
+    <text x="320" y="84" font-size="15" fill="#334155">Drag <tspan font-weight="700">MKV Ripper</tspan> onto the <tspan font-weight="700">Applications</tspan> folder</text>
+    <!-- arrow from the app to Applications -->
+    <path d="M250,200 C290,170 350,170 390,200" fill="none" stroke="#2563eb" stroke-width="5" stroke-linecap="round"
+          stroke-dasharray="1 11" marker-end="url(#head)"/>
+    <!-- after-install hints -->
+    <rect x="70" y="318" width="500" height="78" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="320" y="345" font-size="13" fill="#0f172a"><tspan font-weight="700">Then</tspan> open MKV Ripper from your Applications folder.</text>
+    <text x="320" y="366" font-size="12.5" fill="#475569">The first time, if macOS says it can't check the app, go to</text>
+    <text x="320" y="385" font-size="12.5" fill="#475569"><tspan font-weight="700">System Settings › Privacy &amp; Security</tspan> and click <tspan font-weight="700">Open Anyway</tspan>.</text>
+  </g>
+</svg>

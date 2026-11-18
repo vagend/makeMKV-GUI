@@ -156,21 +156,30 @@ jobs:
         run: |
           # zip: what the app downloads to update itself. ditto keeps permissions, links and signature.
           ditto -c -k --keepParent "dist/MKV Ripper.app" "dist/MKVRipper-mac-${{ matrix.arch }}.zip"
-          # dmg: for first installs; shows the app next to an Applications shortcut to drag it onto
-          S="$RUNNER_TEMP/dmg"; rm -rf "$S"; mkdir -p "$S"
-          ditto "dist/MKV Ripper.app" "$S/MKV Ripper.app"
-          ln -s /Applications "$S/Applications"
+          # dmg: for first installs. The window shows the app, an Applications shortcut, and a background
+          # with an arrow and instructions (packaging/mac). dmgbuild lays it out without driving Finder.
+          python -m pip install "dmgbuild>=1.6"
+          BG="$RUNNER_TEMP/dmg-background.tiff"
+          tiffutil -cathidpicheck packaging/mac/dmg-background.png packaging/mac/dmg-background@2x.png -out "$BG"
           DMG="dist/MKVRipper-mac-${{ matrix.arch }}.dmg"
           for i in 1 2 3; do   # hdiutil is sometimes "busy" on CI machines
-            hdiutil create -volname "MKV Ripper" -srcfolder "$S" -ov -format UDZO "$DMG" && break
+            dmgbuild -s packaging/mac/dmg-settings.py -D app="dist/MKV Ripper.app" -D background="$BG" \
+              "MKV Ripper" "$DMG" && break
             sleep 5
           done
+          test -f "$DMG"
           M="$RUNNER_TEMP/mnt"; mkdir -p "$M"
           hdiutil attach -nobrowse -readonly -mountpoint "$M" "$DMG"
           ls -la "$M"
           test -L "$M/Applications" && test -d "$M/MKV Ripper.app"
           codesign --verify --deep --strict "$M/MKV Ripper.app"
+          test -f "$M/.background/dmg-background.tiff" -o -n "$(ls -A "$M/.background" 2>/dev/null)"
+          test -f "$M/.DS_Store"
           hdiutil detach "$M"
+          # open it in Finder like a person would and take a picture of the window
+          open "$DMG"; sleep 8
+          screencapture -x "dist/dmg-window-${{ matrix.arch }}.png" || true
+          hdiutil detach "/Volumes/MKV Ripper" -force || true
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -179,6 +188,14 @@ jobs:
           path: |
             dist/MKVRipper-mac-${{ matrix.arch }}.zip
             dist/MKVRipper-mac-${{ matrix.arch }}.dmg
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-dmg-${{ matrix.arch }}
+          path: dist/dmg-window-${{ matrix.arch }}.png
+          if-no-files-found: ignore
+          retention-days: 3
           if-no-files-found: error
           retention-days: 3
 
