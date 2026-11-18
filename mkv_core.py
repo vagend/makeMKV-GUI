@@ -36,6 +36,7 @@ ATTR_NAME = 2
 ATTR_CHAPTERS = 8
 ATTR_DURATION = 9
 ATTR_SIZE = 10
+ATTR_SIZE_BYTES = 11
 ATTR_SOURCE = 16
 ATTR_SOURCE_TITLE = 24   # the disc's own title number on DVDs (what VLC's Title menu shows)
 ATTR_OUTPUT_NAME = 27
@@ -668,6 +669,8 @@ def scan_titles(exe, disc_index, minlength, on_line=None):
                 t["chapters"] = value
             elif attr == ATTR_DURATION:
                 t["duration"] = value
+            elif attr == ATTR_SIZE_BYTES and value.strip().isdigit():
+                t["bytes"] = int(value)
             elif attr == ATTR_SIZE:
                 t["size"] = value
             elif attr == ATTR_SOURCE_TITLE and value.strip().isdigit():
@@ -905,9 +908,41 @@ def check_prefix(prefix):
     return "".join(sorted(set(bad)))
 
 
+def local_work_dir(out_dir, size_bytes=0):
+    """Where to rip before saving: this computer's temp folder when the save folder is on another drive
+    (e.g. a network share) and there's room, so trimming and splitting read a local file and the
+    finished files cross the network once. None = rip straight into the save folder."""
+    root = tempfile.gettempdir()
+    try:
+        if os.stat(root).st_dev == os.stat(out_dir).st_dev:
+            return None                         # same drive: ripping in place is already one write
+        need = (size_bytes * 1.15 if size_bytes else 15e9) + 2e9
+        if shutil.disk_usage(root).free < need:
+            return None
+    except OSError:
+        return None
+    return root
+
+
+def _copy_with_progress(src, dst, on_progress=None):
+    total = os.path.getsize(src) or 1
+    done, last = 0, -1
+    with open(src, "rb") as f, open(dst, "wb") as g:
+        while True:
+            chunk = f.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            g.write(chunk)
+            done += len(chunk)
+            pct = done * 100 // total
+            if on_progress and pct != last:
+                on_progress(pct)
+                last = pct
+
+
 def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
               mkvmerge=None, split_points=None, on_split_progress=None, fallback_path=None,
-              on_review=None, tracks=None, notes=None):
+              on_review=None, tracks=None, notes=None, size_bytes=0, on_copy_progress=None):
     """Rip one title into a temp folder, optionally split it at chapters, then move the
     result(s) to final_paths (one path, or one per episode when splitting).
     If splitting fails and fallback_path is given, the whole rip is saved there instead
@@ -918,7 +953,24 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
     if isinstance(final_paths, str):
         final_paths = [final_paths]
     out_dir = os.path.dirname(final_paths[0])
-    tmp = tempfile.mkdtemp(prefix=".mkvrip_", dir=out_dir)
+    local = local_work_dir(out_dir, size_bytes)
+    # tmp: where MakeMKV rips. dest_tmp: a hidden folder in the save folder where finished files are
+    # written, then renamed into place (instant on the same drive), so Plex never sees a half-written file.
+    tmp = tempfile.mkdtemp(prefix="mkvrip_" if local else ".mkvrip_", dir=local or out_dir)
+    dest_tmp = tempfile.mkdtemp(prefix=".mkvrip_", dir=out_dir) if local else tmp
+    if local and on_line:
+        on_line("MSG", ["", "", "", f"Ripping to this computer first ({tmp}); the finished files are then "
+                                    "written to the save folder once"])
+
+    def place(src, dest):
+        """Move a finished file into place; across drives, copy it into the save folder first."""
+        if not local:
+            os.replace(src, dest)
+            return
+        part = os.path.join(dest_tmp, "copy-" + os.path.basename(dest))
+        _copy_with_progress(src, part, on_copy_progress)
+        os.replace(part, dest)
+        os.remove(src)
     try:
         args = [exe, "-r", "--progress=-same", f"--minlength={minlength}",
                 "mkv", f"disc:{disc_index}", str(title_id), tmp]
@@ -948,12 +1000,12 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
 
         def save_whole(dest):
             """Save the rip as one file, keeping only the chosen tracks."""
-            if keep_args:
-                trimmed = os.path.join(tmp, "tracks.mkv")
+            if keep_args:                      # read the local rip, write the trimmed file to the save folder
+                trimmed = os.path.join(dest_tmp, "tracks.mkv")
                 remux_tracks(mkvmerge, ripped, trimmed, keep_args, on_split_progress)
                 os.replace(trimmed, dest)
             else:
-                os.replace(ripped, dest)
+                place(ripped, dest)
 
         if not split_points:
             save_whole(final_paths[0])
@@ -984,7 +1036,7 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
                     on_line("MSG", ["", "", "", "Splitting before chapters " + ", ".join(
                         f"{c} ({fmt(times[c - 1])})" for c in pts)])
                 split_points = pts
-            parts = split_file(mkvmerge, ripped, split_points, os.path.join(tmp, "parts"), on_split_progress,
+            parts = split_file(mkvmerge, ripped, split_points, os.path.join(dest_tmp, "parts"), on_split_progress,
                                keep_args)
             if len(parts) != len(final_paths):
                 raise RuntimeError(f"expected {len(final_paths)} episodes but the split made {len(parts)}")
@@ -994,13 +1046,13 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
             try:
                 save_whole(fallback_path)
             except Exception:  # noqa: BLE001 - don't lose the rip over the track trimming
-                os.replace(ripped, fallback_path)
+                place(ripped, fallback_path)
             return f"fallback: {e}"
         if len(parts) != len(final_paths):
             # Don't lose the rip: keep the unsplit file so it can be split by hand.
             base, ext = os.path.splitext(final_paths[0])
             keep = f"{base} (unsplit){ext}"
-            os.replace(ripped, keep)
+            place(ripped, keep)
             raise RuntimeError(f"Expected {len(final_paths)} episodes from title {title_id} but the split "
                                f"made {len(parts)}. The unsplit rip was kept as:\n{keep}")
         for part, dest in zip(parts, final_paths):
@@ -1008,6 +1060,8 @@ def rip_title(exe, disc_index, minlength, title_id, final_paths, on_line=None,
         return "ok"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        if dest_tmp != tmp:
+            shutil.rmtree(dest_tmp, ignore_errors=True)
 
 
 # ----------------------------------------------------------------------------

@@ -321,7 +321,9 @@ class Api:
                 if tid in chosen_tracks and by_id.get(tid, {}).get("tracks"):
                     tr = (by_id[tid]["tracks"], chosen_tracks[tid])
                 result = core.rip_title(exe, disc, minlen, tid, paths, self._robot, mkvmerge=mkvmerge,
-                                        tracks=tr, notes=tnotes,
+                                        tracks=tr, notes=tnotes, size_bytes=by_id.get(tid, {}).get("bytes", 0),
+                                        on_copy_progress=lambda pct, lab=lab: self._set(
+                                            progress=pct / 100, status=f"Copying title {lab} to the save folder..."),
                                         split_points=pts, fallback_path=fallback,
                                         on_review=lambda times, total, p, n, lab=lab, names=paths: self._ask_review(
                                             lab, times, total, p, n, [os.path.basename(x) for x in names]),

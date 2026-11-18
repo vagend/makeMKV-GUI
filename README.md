@@ -60,6 +60,7 @@ For a multi-disc set, set **First episode** to continue from the last disc (e.g.
 
 - **Settings > Hide titles shorter than** skips short titles (default 120 seconds). Lower it if a short episode is missing.
 - If a split doesn't work out, the title is kept as one multi-episode file (e.g. `S01E01-E03.mkv`), so nothing has to be ripped again.
+- **Saving to a network drive:** MKV Ripper rips to this computer's temp folder first (when there's room), does any trimming and splitting there, and writes the finished files to the network folder once. Files appear in the folder only when they're complete.
 - mkvmerge can only cut on a key frame, so split points may be off by a second or so.
 - **The Mac version is new** and hasn't been tested with a real disc drive yet. If something goes wrong, please open an issue.
 - Use MKV Ripper for discs you own. MakeMKV gets past disc copy protection, and whether that's allowed depends on where you live, so check your local laws.
