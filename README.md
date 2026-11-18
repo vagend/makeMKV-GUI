@@ -6,7 +6,9 @@ A small Windows and Mac front end for MakeMKV that rips the titles you pick and 
 
 - **TV mode:** give a prefix (e.g. `S1E` or `Belgravia (2020) - S01E`) and a first episode number. Checked titles are saved as `S1E1.mkv`, `S1E2.mkv`, …
 - **Split titles:** if a disc stores several episodes as one big title, say how many episodes it holds. MKV Ripper picks the chapters that give the most even episodes, or you type them yourself (e.g. `7,13`). Either way it shows each episode's length before anything is split, and flags an episode that's much longer or shorter than the rest. On a DVD the chapter times come from the disc's own files when you scan, so you see the lengths before ripping. If they can't be read, the rip pauses after copying the title so you can check the lengths (and change the chapters) before it splits. MKVToolNix then splits losslessly and each piece gets the next episode number.
-- **Movie mode:** give the movie name and year (e.g. `The Matrix (1999)`). The first checked title is saved as `The Matrix (1999)/The Matrix (1999).mkv`; any other checked titles are saved beside it as Plex extras (`Extra 1-other.mkv`, …).
+- **Movie mode:** give the movie name and year (e.g. `The Matrix (1999)`). The first checked title is saved as `The Matrix (1999).mkv` straight in the folder you pick, or as `The Matrix (1999)/The Matrix (1999).mkv` if you tick **Put the movie in its own folder**. Any other checked titles are saved beside it as extras.
+- **Audio and subtitles:** pick which audio and subtitle tracks to keep for each title. Tracks in your languages are ticked to start with.
+- **Network drives:** when you save to another drive, it rips on this computer first and writes the finished files across once.
 
 ## Download and run (Windows)
 
@@ -49,6 +51,9 @@ Every push to `main` (except README-only changes) builds the Windows app (`MKVRi
 3. Choose **TV show** or **Movie** and fill in the name. The **Saved as** column shows each file name before anything is ripped.
 4. If one title holds several episodes, click its **Episodes** label (it says **Several episodes?** when the title is long). Pick how many episodes it holds, then let MKV Ripper find the most even cuts or type the chapters yourself. Either way you see each episode's length before ripping. You can also keep it as one multi-episode file, like `S01E01-E03.mkv`.
 5. To choose audio and subtitles, click a title's **Audio · Subs** button and tick what to keep. Tracks in your languages (Settings > Audio & subtitles, `eng` to start) are ticked by default, and the same choices can be applied to every selected title.
+
+   ![Choosing audio and subtitle tracks for a title](docs/tracks.png)
+
 6. Pick the folder to save to and click **Rip**.
 
 For a multi-disc set, set **First episode** to continue from the last disc (e.g. 4 for disc 2 of a 3-per-disc set).
