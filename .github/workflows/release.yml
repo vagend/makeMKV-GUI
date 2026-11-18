@@ -173,7 +173,7 @@ jobs:
           ls -la "$M"
           test -L "$M/Applications" && test -d "$M/MKV Ripper.app"
           codesign --verify --deep --strict "$M/MKV Ripper.app"
-          test -f "$M/.background/dmg-background.tiff" -o -n "$(ls -A "$M/.background" 2>/dev/null)"
+          ls "$M"/.background* >/dev/null   # dmgbuild stores the picture as .background.tiff
           test -f "$M/.DS_Store"
           hdiutil detach "$M"
           # open it in Finder like a person would and take a picture of the window
