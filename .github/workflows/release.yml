@@ -179,6 +179,10 @@ jobs:
           # open it in Finder like a person would and take a picture of the window
           open "$DMG"; sleep 8
           screencapture -x "dist/dmg-window-${{ matrix.arch }}.png" || true
+          if [ -f "dist/dmg-window-${{ matrix.arch }}.png" ]; then   # small copy in the log, for checking the layout
+            sips -s format jpeg -s formatOptions 55 -Z 1100 "dist/dmg-window-${{ matrix.arch }}.png" --out "$RUNNER_TEMP/w.jpg" >/dev/null
+            echo "DMGSHOT-BEGIN"; base64 -i "$RUNNER_TEMP/w.jpg" | fold -w 2000; echo "DMGSHOT-END"
+          fi
           hdiutil detach "/Volumes/MKV Ripper" -force || true
           ls -la dist
 
