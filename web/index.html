@@ -784,7 +784,10 @@ function wire() {
   $("#settingsBtn").onclick = openSettings;
   $("#installMakeMKV").onclick = () => installTool("MakeMKV");
   $("#updChip").onclick = () => confirmBox(`Update to build ${B.update.build}?`, "<p style='margin:0'>MKV Ripper will download the new version and restart.</p>",
-    "Update and restart", async () => { const r = await api.apply_update(); if (r.error) toast("error", r.error); });
+    "Update and restart", async () => {
+      const r = await api.apply_update();
+      if (r.move) offerMove(true); else if (r.error) toast("error", r.error);
+    });
   $("#allBtn").onclick = () => { B.titles.forEach(t => { if (!isPlayAll(t)) S.checked.add(t.id); }); refreshNames(); };
   $("#noneBtn").onclick = () => { S.checked.clear(); refreshNames(); };
   $("#tlist").addEventListener("click", e => {
@@ -821,13 +824,14 @@ async function init() {
 }
 
 /* Mac: the app should live in Applications (it can't update itself from Downloads or the .dmg) */
-function offerMove() {
+function offerMove(forUpdate = false) {
   dialog(`
     <div class="dh"><h3>Move MKV Ripper to Applications?</h3>
       <p>It's running from your Downloads folder or the disk image.</p></div>
     <div class="content">
-      <p style="margin:0 0 8px">MKV Ripper needs to be in your Applications folder to update itself and to show up in Launchpad.
-        It will copy itself there and reopen.</p>
+      <p style="margin:0 0 8px">${forUpdate ? "To install the update, MKV Ripper first has to be in your Applications folder: macOS doesn't let a downloaded app change itself until it's there."
+        : "MKV Ripper needs to be in your Applications folder to update itself and to show up in Launchpad."}
+        It will copy itself there and reopen${forUpdate ? "; then click Update again" : ""}.</p>
       <div class="callout err" id="mvErr" hidden></div>
     </div>
     <div class="df"><button class="btn ghost" data-x>Not now</button><div class="spacer"></div>

@@ -422,16 +422,19 @@ class Api:
         url = getattr(self, "_update_url", None)
         if not url or not core.is_frozen():
             return {"error": "No update to install."}
+        if core.mac_outside_applications():
+            # macOS runs a downloaded app from a read-only copy until it's moved, so it can't replace itself
+            return {"move": True}
 
         def work():
             self._set(status="Downloading the update...")
             try:
                 core.install_update(url)
             except Exception as e:  # noqa: BLE001
-                self._logline(f"Update download failed: {e}")
-                what = (f"download {core.update_asset()} and drag MKV Ripper into Applications" if core.IS_MAC
+                self._logline(f"Update failed: {e}")
+                what = (f"download {core.update_asset().replace('.zip', '.dmg')} and drag MKV Ripper into Applications" if core.IS_MAC
                         else "run MKVRipper-setup.exe from there")
-                self._notice("error", f"Couldn't download the update ({e}). The download page is opening in "
+                self._notice("error", f"Couldn't install the update ({e}). The download page is opening in "
                                       f"your browser: {what}.")
                 self.open_releases()
                 self._set(status="Ready")
