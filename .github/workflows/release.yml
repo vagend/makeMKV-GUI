@@ -188,6 +188,8 @@ jobs:
           path: |
             dist/MKVRipper-mac-${{ matrix.arch }}.zip
             dist/MKVRipper-mac-${{ matrix.arch }}.dmg
+          if-no-files-found: error
+          retention-days: 3
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -195,8 +197,6 @@ jobs:
           name: screenshot-dmg-${{ matrix.arch }}
           path: dist/dmg-window-${{ matrix.arch }}.png
           if-no-files-found: ignore
-          retention-days: 3
-          if-no-files-found: error
           retention-days: 3
 
   release:
