@@ -129,16 +129,56 @@ jobs:
           echo "$r" | grep -q "MKV Ripper / api:object" || { echo "page or Python bridge didn't load"; exit 1; }
           echo "$r" | grep -Eq "https:truststore[._a-z]* / (latest|http-status):[0-9]+" || { echo "update check over HTTPS failed"; exit 1; }
 
-      - name: Zip the app
+      - name: Check the move-to-Applications step
         run: |
-          # ditto keeps the app's permissions, links and signature intact
+          # a downloaded copy (with the quarantine flag) must land in Applications signed and unflagged
+          T="$RUNNER_TEMP/mv"; mkdir -p "$T/Downloads" "$T/Applications"
+          ditto "dist/MKV Ripper.app" "$T/Downloads/MKV Ripper.app"
+          xattr -w com.apple.quarantine "0083;00000000;Safari;" "$T/Downloads/MKV Ripper.app"
+          python - "$T" <<'PY'
+          import os, subprocess, sys
+          sys.path.insert(0, os.getcwd())
+          import mkv_core as c
+          t = sys.argv[1]
+          c.is_frozen = lambda: True
+          sys.executable = f"{t}/Downloads/MKV Ripper.app/Contents/MacOS/MKVRipper"
+          assert c.mac_outside_applications(), "should offer to move from Downloads"
+          dst = c.move_to_applications([f"{t}/Applications"])
+          print("moved to", dst)
+          assert not os.path.exists(f"{t}/Downloads/MKV Ripper.app"), "Downloads copy should be gone"
+          subprocess.run(["codesign", "--verify", "--deep", "--strict", dst], check=True)
+          q = subprocess.run(["xattr", "-p", "com.apple.quarantine", dst], capture_output=True)
+          assert q.returncode != 0, "quarantine flag should be cleared"
+          print("signature OK, quarantine cleared")
+          PY
+
+      - name: Zip and disk image
+        run: |
+          # zip: what the app downloads to update itself. ditto keeps permissions, links and signature.
           ditto -c -k --keepParent "dist/MKV Ripper.app" "dist/MKVRipper-mac-${{ matrix.arch }}.zip"
+          # dmg: for first installs; shows the app next to an Applications shortcut to drag it onto
+          S="$RUNNER_TEMP/dmg"; rm -rf "$S"; mkdir -p "$S"
+          ditto "dist/MKV Ripper.app" "$S/MKV Ripper.app"
+          ln -s /Applications "$S/Applications"
+          DMG="dist/MKVRipper-mac-${{ matrix.arch }}.dmg"
+          for i in 1 2 3; do   # hdiutil is sometimes "busy" on CI machines
+            hdiutil create -volname "MKV Ripper" -srcfolder "$S" -ov -format UDZO "$DMG" && break
+            sleep 5
+          done
+          M="$RUNNER_TEMP/mnt"; mkdir -p "$M"
+          hdiutil attach -nobrowse -readonly -mountpoint "$M" "$DMG"
+          ls -la "$M"
+          test -L "$M/Applications" && test -d "$M/MKV Ripper.app"
+          codesign --verify --deep --strict "$M/MKV Ripper.app"
+          hdiutil detach "$M"
           ls -la dist
 
       - uses: actions/upload-artifact@v4
         with:
           name: MKVRipper-mac-${{ matrix.arch }}
-          path: dist/MKVRipper-mac-${{ matrix.arch }}.zip
+          path: |
+            dist/MKVRipper-mac-${{ matrix.arch }}.zip
+            dist/MKVRipper-mac-${{ matrix.arch }}.dmg
           if-no-files-found: error
           retention-days: 3
 
@@ -162,6 +202,7 @@ jobs:
           echo "${{ github.run_number }}" > out/BUILD.txt   # what the app reads to see if it's out of date
           ls -la out
           gh release create latest out/MKVRipper-setup.exe out/MKVRipper.exe out/BUILD.txt \
+            out/MKVRipper-mac-AppleSilicon.dmg out/MKVRipper-mac-Intel.dmg \
             out/MKVRipper-mac-AppleSilicon.zip out/MKVRipper-mac-Intel.zip \
             --target "$GITHUB_SHA" \
             --title "MKV Ripper (build ${{ github.run_number }})" \
@@ -175,6 +216,6 @@ jobs:
 
           Windows SmartScreen may warn that the app isn't from a known publisher: click **More info > Run anyway**.
 
-          **Mac:** download **MKVRipper-mac-AppleSilicon.zip** for an M1/M2/M3/M4 Mac, or **MKVRipper-mac-Intel.zip** for an Intel Mac (Apple menu > About This Mac shows which). Open the zip and drag **MKV Ripper** into Applications.
+          **Mac:** download **MKVRipper-mac-AppleSilicon.dmg** for an M1/M2/M3/M4 Mac, or **MKVRipper-mac-Intel.dmg** for an Intel Mac (Apple menu > About This Mac shows which). Open it and drag **MKV Ripper** onto the **Applications** folder next to it. If you open it from somewhere else, it offers to move itself. (The .zip files are what the app uses to update itself.)
           The first time, macOS says it can't verify the app: click **Done**, open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**. After that it opens normally and updates itself.
           Install MakeMKV from makemkv.com; the app offers MKVToolNix through Homebrew if you have it, or its download page."

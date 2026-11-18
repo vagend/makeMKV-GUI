@@ -256,6 +256,62 @@ def app_bundle():
     return p if p.endswith(".app") else ""
 
 
+def mac_outside_applications():
+    """Mac: True when this copy isn't in an Applications folder (e.g. run from Downloads, the .dmg, or the
+    hidden read-only copy macOS makes of a freshly downloaded app). It can't update itself from there."""
+    b = app_bundle()
+    if not (IS_MAC and is_frozen() and b):
+        return False
+    homes = ("/Applications/", os.path.expanduser("~/Applications/"))
+    return not b.startswith(homes)
+
+
+def _copy_app(src, dst):
+    if os.path.isfile("/usr/bin/ditto"):           # keeps the code signature, links and permissions
+        subprocess.run(["/usr/bin/ditto", src, dst], check=True)
+    else:
+        shutil.copytree(src, dst, symlinks=True)
+
+
+def move_to_applications(targets=None):
+    """Copy the running app into Applications (or ~/Applications if that isn't writable), clear the
+    download flag so macOS runs it in place, and return the new path. The caller opens it and quits.
+    A copy run straight from Downloads is removed; one in macOS's hidden read-only copy or on the .dmg
+    can't be, so the original stays where it was."""
+    src = app_bundle()
+    name = os.path.basename(src)
+    targets = targets or ["/Applications", os.path.expanduser("~/Applications")]
+    last = None
+    for folder in targets:
+        dst = os.path.join(folder, name)
+        try:
+            os.makedirs(folder, exist_ok=True)
+            if not os.access(folder, os.W_OK):
+                raise PermissionError(f"can't write to {folder}")
+            old = dst + ".old"
+            if os.path.exists(dst):                # an older copy already there: replace it
+                shutil.rmtree(old, ignore_errors=True)
+                os.rename(dst, old)
+            try:
+                _copy_app(src, dst)
+            except Exception:
+                shutil.rmtree(dst, ignore_errors=True)
+                if os.path.exists(old):
+                    os.rename(old, dst)
+                raise
+            shutil.rmtree(old, ignore_errors=True)
+            if os.path.isfile("/usr/bin/xattr"):
+                subprocess.run(["/usr/bin/xattr", "-dr", "com.apple.quarantine", dst],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            read_only = "/AppTranslocation/" in src or src.startswith("/Volumes/")
+            if not read_only:
+                shutil.rmtree(src, ignore_errors=True)
+            return dst
+        except (OSError, subprocess.CalledProcessError) as e:
+            last = e
+    raise RuntimeError(f"couldn't copy MKV Ripper to Applications ({last})")
+
+
 def cleanup_old_exe():
     if not is_frozen():
         return

@@ -18,8 +18,8 @@ Windows SmartScreen may warn about the download because it isn't code-signed. Cl
 
 ## Download and run (Mac)
 
-1. Go to [Releases](https://github.com/vagend/makeMKV-GUI/releases/latest) and download **MKVRipper-mac-AppleSilicon.zip** for an M1 or newer Mac, or **MKVRipper-mac-Intel.zip** for an Intel Mac (Apple menu > About This Mac shows which you have).
-2. Open the zip and drag **MKV Ripper** into **Applications**.
+1. Go to [Releases](https://github.com/vagend/makeMKV-GUI/releases/latest) and download **MKVRipper-mac-AppleSilicon.dmg** for an M1 or newer Mac, or **MKVRipper-mac-Intel.dmg** for an Intel Mac (Apple menu > About This Mac shows which you have).
+2. Open the .dmg and drag **MKV Ripper** onto the **Applications** folder beside it. If you forget and open it from somewhere else, it offers to move itself into Applications (it has to live there to update itself). The .zip files on the release are what the app downloads to update itself.
 3. The first time you open it, macOS says it can't verify the app (it isn't signed with a paid Apple developer account). Click **Done**, open **System Settings > Privacy & Security**, scroll down and click **Open Anyway**. You only do this once; updates install themselves.
 4. Install **MakeMKV** from [makemkv.com](https://www.makemkv.com/download/) (Homebrew no longer offers it). For splitting, the app installs **MKVToolNix** with Homebrew if you have it, or opens its download page.
 

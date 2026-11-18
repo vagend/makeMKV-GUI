@@ -51,6 +51,7 @@ class Api:
             "result": None,
             "update": None,           # {"build": n} when a newer build is on GitHub
             "review": None,           # a split waiting for the person to check episode lengths
+            "move_offer": core.mac_outside_applications(),   # Mac: offer to move into Applications
         }
         self._review_event = threading.Event()
         self._review_answer = None
@@ -133,7 +134,7 @@ class Api:
             self.save_settings({"icons_build": core.APP_BUILD})
         if self._tools()["makemkv"]:
             self.refresh_drives()
-        if core.is_frozen():
+        if core.is_frozen() and not self._s["move_offer"]:   # can't update until it's in Applications
             threading.Thread(target=self._check_update, daemon=True).start()
         return self.get_state()
 
@@ -440,6 +441,17 @@ class Api:
             self._window.destroy()
         self._run("update", work)
         return {"ok": True}
+
+    def move_to_applications(self):
+        """Mac: copy into Applications, open that copy, and close this one."""
+        try:
+            new = core.move_to_applications()
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"{e}. You can drag MKV Ripper into Applications in the Finder instead."}
+        import subprocess
+        subprocess.Popen(["/usr/bin/open", "-n", new])
+        threading.Timer(0.8, lambda: self._window and self._window.destroy()).start()
+        return {"ok": True, "path": new}
 
     def open_releases(self):
         import webbrowser

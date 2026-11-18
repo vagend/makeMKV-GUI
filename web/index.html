@@ -817,6 +817,32 @@ async function init() {
   B = st; logFrom = st.log_end || 0;
   wire(); renderAll(); refreshNames();
   setInterval(poll, 400);
+  if (B.move_offer) offerMove();
+}
+
+/* Mac: the app should live in Applications (it can't update itself from Downloads or the .dmg) */
+function offerMove() {
+  dialog(`
+    <div class="dh"><h3>Move MKV Ripper to Applications?</h3>
+      <p>It's running from your Downloads folder or the disk image.</p></div>
+    <div class="content">
+      <p style="margin:0 0 8px">MKV Ripper needs to be in your Applications folder to update itself and to show up in Launchpad.
+        It will copy itself there and reopen.</p>
+      <div class="callout err" id="mvErr" hidden></div>
+    </div>
+    <div class="df"><button class="btn ghost" data-x>Not now</button><div class="spacer"></div>
+      <button class="btn primary" data-ok>Move to Applications</button></div>`,
+  (d, close) => {
+    const ok = d.querySelector("[data-ok]"), err = d.querySelector("#mvErr");
+    d.querySelector("[data-x]").onclick = close;
+    ok.onclick = async () => {
+      ok.disabled = true; ok.textContent = "Moving…";
+      const r = await api.move_to_applications();
+      if (r && r.error) { err.textContent = r.error; err.hidden = false; ok.disabled = false; ok.textContent = "Try again"; }
+      else ok.textContent = "Reopening…";
+    };
+    ok.focus();
+  });
 }
 if (window.pywebview && window.pywebview.api) init();
 else window.addEventListener("pywebviewready", init);
